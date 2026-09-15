@@ -1,0 +1,173 @@
+# identity-service
+
+[← Volver al índice](../README.md) · [auth-service](./auth-service.md) · [organization-service](./organization-service.md) · [estrategia multipaís](../arquitectura/estrategia-multipais.md)
+
+> **Actualización (multipaís):** los roles ahora llevan un **alcance (scope)**: `tenant` (todo el grupo, todos los países), `organization` (una entidad legal / país) o `establishment` (un local). El rol "que ve varios países" es **scope `tenant` con `analytics:read`**. Fuente: [estrategia multipaís](../arquitectura/estrategia-multipais.md#analítica-y-roles-multipaís).
+
+## Responsabilidad
+
+Responde a **"¿qué puedes hacer?"**. Gestiona **usuarios**, **roles** y **permisos** (RBAC), y la **membresía de usuarios a organizaciones**. Es la fuente de verdad de la identidad de negocio (no de las credenciales: eso es de [auth-service](./auth-service.md)).
+
+## Modelo RBAC
+
+```mermaid
+erDiagram
+    USER ||--o{ ORGANIZATION_MEMBERSHIP : pertenece
+    USER ||--o{ USER_ROLE : tiene
+    ROLE ||--o{ USER_ROLE : asignado
+    ROLE ||--o{ ROLE_PERMISSION : agrupa
+    PERMISSION ||--o{ ROLE_PERMISSION : incluido
+
+    USER {
+        uuid id PK
+        string email UK
+        string full_name
+        string phone
+        enum status "active|disabled"
+        bool is_platform_admin "super-admin global"
+    }
+    ORGANIZATION_MEMBERSHIP {
+        uuid id PK
+        uuid user_id FK
+        uuid organization_id "ref → organization-service"
+        enum status "active|invited|disabled"
+    }
+    ROLE {
+        uuid id PK
+        uuid organization_id "★ rol por organización (null = plantilla global)"
+        string name "admin, vendedor, contador"
+        string description
+        bool is_system "rol base no editable"
+    }
+    PERMISSION {
+        uuid id PK
+        string code UK "invoice:create"
+        string resource "invoice"
+        string action "create|read|update|delete"
+        string description
+    }
+    USER_ROLE {
+        uuid id PK
+        uuid user_id FK
+        uuid organization_id "★ el rol aplica en esta org"
+        uuid role_id FK
+    }
+    ROLE_PERMISSION {
+        uuid role_id FK
+        uuid permission_id FK
+    }
+```
+
+### Claves del modelo
+
+- **El usuario es global** (la persona). No lleva `organization_id`: puede estar en varias organizaciones.
+- **Los roles son por organización.** El rol "admin" de la Org A es distinto del de la Org B. Hay además **plantillas de rol** globales (`organization_id = null`) que se clonan al crear una organización.
+- **`USER_ROLE` lleva `organization_id`**: un mismo usuario puede ser "admin" en una org y "vendedor" en otra.
+- **Los permisos son catálogo de plataforma** (`invoice:create`, `customer:read`...): los definen los desarrolladores, son los mismos para todas las organizaciones.
+
+## Permisos: convención
+
+Formato `recurso:acción`. Catálogo base:
+
+| Recurso | Acciones | Ejemplos |
+|---------|----------|----------|
+| `customer` | create, read, update, delete | `customer:create` |
+| `product` | create, read, update, delete | `product:update` |
+| `invoice` | create, read, void, authorize | `invoice:void` |
+| `organization` | read, update | `organization:update` |
+| `establishment` | create, read, update | `establishment:create` |
+| `user` | invite, read, update, assign_role | `user:assign_role` |
+| `tax_config` | read | `tax_config:read` |
+| `report` | read | `report:read` |
+| `analytics` | read | `analytics:read` (consolidado según scope) |
+
+El [gateway](./api-gateway.md) y/o cada servicio verifican estos permisos (que viajan en el JWT, ver [auth-service](./auth-service.md#read-model-de-permisos)).
+
+## Roles base (plantillas que se clonan por organización)
+
+| Rol | Permisos típicos |
+|-----|------------------|
+| **Administrador** | Todos dentro de su organización |
+| **Vendedor** | `customer:*`, `product:read`, `invoice:create`, `invoice:read` |
+| **Contador** | `invoice:read`, `report:read`, `tax_config:read` |
+| **Solo lectura** | `*:read` |
+
+## Flujo: invitar usuario a una organización
+
+```mermaid
+sequenceDiagram
+    participant Admin as SPA (admin)
+    participant ID as identity-service
+    participant MQ as RabbitMQ
+    participant AUTH as auth-service
+
+    Admin->>ID: POST /users/invite {email, roleId}
+    ID->>ID: crea/asocia USER + membership + user_role
+    ID->>MQ: identity.user.created / role_assigned
+    MQ->>AUTH: consume → prepara credencial + read-model
+    AUTH-->>Admin: (email de invitación para fijar contraseña)
+```
+
+## API REST (resumen)
+
+| Método | Ruta | Permiso |
+|--------|------|---------|
+| GET | `/users` | `user:read` |
+| POST | `/users/invite` | `user:invite` |
+| PATCH | `/users/:id` | `user:update` |
+| POST | `/users/:id/disable` | `user:update` |
+| GET | `/roles` | `user:read` |
+| POST | `/roles` | `user:assign_role` |
+| PATCH | `/roles/:id/permissions` | `user:assign_role` |
+| POST | `/users/:id/roles` | `user:assign_role` |
+| GET | `/permissions` | (catálogo) |
+
+Todas las rutas operan dentro del `organizationId` del contexto (ver [multiorganizacional](../arquitectura/multiorganizacional.md)).
+
+## Eventos
+
+**Publica:**
+
+| Evento | Cuándo | Consumido por |
+|--------|--------|---------------|
+| `identity.user.created` | Nuevo usuario/invitación | [auth](./auth-service.md), [realtime](./realtime-service.md) |
+| `identity.user.role_assigned` | Asignación/cambio de rol | [auth](./auth-service.md) (refresca JWT) |
+| `identity.user.disabled` | Baja de usuario | [auth](./auth-service.md) (revoca tokens) |
+| `identity.role.updated` | Cambio de permisos de un rol | [auth](./auth-service.md) |
+
+**Consume:**
+
+| Evento | Origen | Acción |
+|--------|--------|--------|
+| `organization.org.created` | [organization](./organization-service.md) | Clona roles base + crea membership del fundador como admin |
+| `auth.credential.registered` | [auth](./auth-service.md) | Vincula la credencial al usuario |
+
+## Dependencias
+
+- **organization-service**: vía eventos (al crearse una org, siembra roles).
+- **auth-service**: vía eventos (sincroniza identidad ↔ credenciales).
+
+## Validaciones (ver [validación](../arquitectura/validacion.md))
+
+- **Borde (Zod)**: email válido, `roleId` existe, formato de permisos.
+- **Dominio**: un rol del sistema (`is_system`) no se edita; no quitar el último admin de una organización; el permiso debe existir en el catálogo.
+
+## Evolución multipaís: scope de roles
+
+Para el acceso cross-país (ver [estrategia multipaís](../arquitectura/estrategia-multipais.md#analítica-y-roles-multipaís)), un permiso no basta: el rol necesita un **alcance**. La asignación generaliza de `(usuario, rol, organization_id)` a **`(usuario, rol, scope_type, scope_id)`**:
+
+| `scope_type` | `scope_id` apunta a | Qué ve | Rol típico |
+|--------------|---------------------|--------|-----------|
+| `tenant` | grupo | **todas** las entidades y países | Dirección / CFO / analista de grupo |
+| `organization` | entidad legal | un país, una empresa | Contador local, gerente de país |
+| `establishment` | local | una sucursal | Cajero, vendedor de sucursal |
+
+- **El rol multipaís** = scope `tenant` + `analytics:read` (o `invoice:read`): ve el **consolidado** de todos los países del grupo. Un analista de scope `organization` ve solo su país.
+- **Row-level en el reporting**: el futuro `analytics-service` (y [billing](./billing-service.md)) **filtran** las queries al conjunto de `tenant_id` / `organization_id` / `country_code` que el scope autoriza — el mismo aislamiento que ya aplica lo operativo, ahora sobre los hechos.
+- **Compatibilidad**: el caso actual (`USER_ROLE.organization_id`) equivale a `scope_type = organization`; introducir `scope_type` + `scope_id` lo generaliza sin romperlo.
+- Se enlaza con la **moneda**: el visor de grupo consolida en moneda de reporte; el de entidad, en moneda local.
+
+## Notas
+
+- Modelo **RBAC** (roles → permisos). Si en el futuro se necesita granularidad por recurso individual (ABAC), se extiende con condiciones, pero RBAC cubre el 95% de un CRM.
+- El `is_platform_admin` permite super-administración de la plataforma (soporte), fuera del scope de cualquier organización.

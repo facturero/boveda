@@ -1,0 +1,359 @@
+{
+  "main": {
+    "id": "0fdda286367e1b1e",
+    "type": "split",
+    "children": [
+      {
+        "id": "feba622666e3dd39",
+        "type": "split",
+        "children": [
+          {
+            "id": "ea977f50995e7ec3",
+            "type": "tabs",
+            "dimension": 77.67857142857143,
+            "children": [
+              {
+                "id": "07c4f2c49b0f29c5",
+                "type": "leaf",
+                "state": {
+                  "type": "graph",
+                  "state": {},
+                  "icon": "lucide-git-fork",
+                  "title": "Vista gráfica"
+                }
+              }
+            ]
+          },
+          {
+            "id": "1fbd0b0f37ade0da",
+            "type": "tabs",
+            "dimension": 22.321428571428573,
+            "children": [
+              {
+                "id": "94967eabd53ff23d",
+                "type": "leaf",
+                "state": {
+                  "type": "markdown",
+                  "state": {
+                    "file": "crm-proyect/servicios/document-service.md",
+                    "mode": "source",
+                    "source": false
+                  },
+                  "icon": "lucide-file",
+                  "title": "document-service"
+                }
+              },
+              {
+                "id": "2a7b52f8137b2162",
+                "type": "leaf",
+                "pinned": true,
+                "state": {
+                  "type": "terminal:terminal",
+                  "state": {
+                    "terminal:terminal": {
+                      "cwd": "C:\\Users\\sansh\\Documents\\sg-obs",
+                      "focus": false,
+                      "profile": {
+                        "args": [],
+                        "environment": [],
+                        "executable": "C:\\Windows\\System32\\cmd.exe",
+                        "followTheme": true,
+                        "name": "",
+                        "platforms": {
+                          "win32": true
+                        },
+                        "pythonExecutable": "python3",
+                        "restoreHistory": false,
+                        "rightClickAction": "copyPaste",
+                        "successExitCodes": [
+                          "0",
+                          "SIGINT",
+                          "SIGTERM"
+                        ],
+                        "terminalOptions": {
+                          "documentOverride": null
+                        },
+                        "type": "integrated",
+                        "useWin32Conhost": true
+                      },
+                      "profileSourceId": "win32IntegratedDefault",
+                      "serial": null,
+                      "userTitle": ""
+                    }
+                  },
+                  "pinned": true,
+                  "icon": "terminal",
+                  "title": "Terminal: cmd"
+                }
+              },
+              {
+                "id": "3202125f2ad5d2d2",
+                "type": "leaf",
+                "pinned": true,
+                "state": {
+                  "type": "terminal:terminal",
+                  "state": {
+                    "terminal:terminal": {
+                      "cwd": "C:\\Users\\sansh\\Documents\\sg-obs",
+                      "focus": false,
+                      "profile": {
+                        "args": [],
+                        "environment": [],
+                        "executable": "C:\\Windows\\System32\\cmd.exe",
+                        "followTheme": true,
+                        "name": "",
+                        "platforms": {
+                          "win32": true
+                        },
+                        "pythonExecutable": "python3",
+                        "restoreHistory": false,
+                        "rightClickAction": "copyPaste",
+                        "successExitCodes": [
+                          "0",
+                          "SIGINT",
+                          "SIGTERM"
+                        ],
+                        "terminalOptions": {
+                          "documentOverride": null
+                        },
+                        "type": "integrated",
+                        "useWin32Conhost": true
+                      },
+                      "profileSourceId": "win32IntegratedDefault",
+                      "serial": null,
+                      "userTitle": ""
+                    }
+                  },
+                  "pinned": true,
+                  "icon": "terminal",
+                  "title": "Terminal: C:\\Windows\\System32\\conhost.exe"
+                }
+              },
+              {
+                "id": "2af2a4a7fb5b9146",
+                "type": "leaf",
+                "state": {
+                  "type": "empty",
+                  "state": {},
+                  "icon": "lucide-file",
+                  "title": "Nueva pestaña"
+                }
+              }
+            ],
+            "currentTab": 2
+          }
+        ],
+        "direction": "horizontal"
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "708651499944a1f1",
+    "type": "split",
+    "children": [
+      {
+        "id": "1a19142d9b3b1e94",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "3e8a8548bb4f3e13",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Explorador de archivos"
+            }
+          },
+          {
+            "id": "356496815799a255",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Buscar"
+            }
+          },
+          {
+            "id": "70be400d6c2b392a",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Marcadores"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "935e4407a92691af",
+    "type": "split",
+    "children": [
+      {
+        "id": "22b53e931572c8a8",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "b0c19f5a702fece2",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "docs/05-microservices.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Enlaces entrantes de 05-microservices"
+            }
+          },
+          {
+            "id": "a9d359baa90d4ae0",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "docs/05-microservices.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Enlaces salientes de 05-microservices"
+            }
+          },
+          {
+            "id": "76836a1a7f09d299",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Etiquetas"
+            }
+          },
+          {
+            "id": "f3917d1308fd2886",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "Todas las propiedades"
+            }
+          },
+          {
+            "id": "9bcb32dba7c822b3",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "docs/05-microservices.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Esquema de 05-microservices"
+            }
+          },
+          {
+            "id": "1ddc5cefbc89655a",
+            "type": "leaf",
+            "state": {
+              "type": "calendar",
+              "state": {},
+              "icon": "calendar-with-checkmark",
+              "title": "Calendar"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Abrir selector rápido": false,
+      "graph:Abrir vista gráfica": false,
+      "canvas:Crear nuevo lienzo": false,
+      "daily-notes:Abrir la nota de hoy": false,
+      "templates:Insertar plantilla": false,
+      "command-palette:Abrir paleta de comandos": false,
+      "bases:Crear nueva base": false,
+      "copilot:Open Copilot Chat": false,
+      "templater-obsidian:Templater": false,
+      "terminal:Open terminal": false
+    }
+  },
+  "active": "07c4f2c49b0f29c5",
+  "lastOpenFiles": [
+    "crm-proyect/servicios/audit-log-service.md",
+    "crm-proyect/servicios/document-service.md",
+    "crm-proyect/servicios/auth-service.md",
+    "crm-proyect/servicios/identity-service.md",
+    "crm-proyect/servicios/identity-service.md.bak",
+    "crm-proyect/arquitectura/autorizacion.md",
+    "docs/05-microservices.md",
+    "crm-proyect/modelo-datos/relaciones-globales.md",
+    "crm-proyect/frontend/arquitectura-frontend.md",
+    "crm-proyect/servicios/api-gateway.md",
+    "crm-proyect/servicios/realtime-service.md",
+    "crm-proyect/servicios/billing-service.md",
+    "crm-proyect/servicios/product-service.md",
+    "crm-proyect/servicios/customer-service.md",
+    "crm-proyect/servicios/tax-service.md",
+    "crm-proyect/servicios/organization-service.md",
+    "crm-proyect/arquitectura/tiempo-real.md",
+    "crm-proyect/arquitectura/validacion.md",
+    "crm-proyect/arquitectura/arquitectura-limpia.md",
+    "crm-proyect/arquitectura/multiorganizacional.md",
+    "crm-proyect/arquitectura/comunicacion.md",
+    "crm-proyect/arquitectura/microservicios.md",
+    "crm-proyect/arquitectura/vision-general.md",
+    "crm-proyect/README.md",
+    "crm-proyect/modelo-datos",
+    "crm-proyect/frontend",
+    "crm-proyect/servicios",
+    "crm-proyect/arquitectura",
+    "crm-proyect",
+    "docs/12-guidelines.md",
+    "docs/11-deployment.md",
+    "docs/10-data-models.md",
+    "docs"
+  ]
+}

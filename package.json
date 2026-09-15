@@ -1,0 +1,20 @@
+{
+  "name": "sg-obs-crm",
+  "private": true,
+  "workspaces": [
+    "services/*",
+    "api-gateway",
+    "frontend"
+  ],
+  "scripts": {
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "services:dev": "npm run dev --workspaces --if-present",
+    "services:build": "npm run build --workspaces --if-present",
+    "gateway:dev": "npm run dev -w api-gateway",
+    "frontend:dev": "npm run dev -w frontend"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
