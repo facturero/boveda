@@ -45,4 +45,6 @@ Dos detalles de diseño:
 
 ## Lo que se diseñó y no se hizo
 
-Del diseño original se descartaron (o quedaron para más adelante): el chat entre usuarios, el adaptador de Redis para escalar a varias réplicas y los namespaces separados. Hoy el gateway corre en una réplica y el hub reparte en memoria; **escalar el gateway a más de una réplica exige resolver esto primero**.
+Del diseño original se descartaron (o quedaron para más adelante): el adaptador de Redis para escalar a varias réplicas y los namespaces separados. Hoy el gateway corre en una réplica y el hub reparte en memoria; **escalar el gateway a más de una réplica exige resolver esto primero**.
+
+> **El chat entre usuarios ya no está descartado**: se está construyendo en [chat-service](./chat-service.md) (persistencia + casos de uso listos; WS en curso). El hub se suscribirá a `chat.message.#` y emitirá `chat.message.new` a la sala `user:<destinatario>`.

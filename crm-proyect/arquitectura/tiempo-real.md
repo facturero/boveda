@@ -4,7 +4,7 @@
 
 > ⚠️ **Corregido el 2026-09-14.** El servicio dedicado que describe este documento **nunca se construyó**. El principio se mantuvo, pero la pieza cambió de sitio: el **Socket.IO vive dentro del [api-gateway](../servicios/api-gateway.md)** (`/ws`) y las notificaciones persistentes en [notification-service](../servicios/notification-service.md). Lo que sigue vale como razonamiento de diseño; para el comportamiento real ver [tiempo real](../servicios/realtime-service.md).
 >
-> Diferencias concretas con lo diseñado aquí: no hay `realtime_db` ni chat; las salas son `catalog:<orgId>`, `user:<uid>` y `device:<sub>`; no hay adaptador de Redis, así que **el gateway corre en una sola réplica**; el canal `app` se consulta a notification-service antes de emitir.
+> Diferencias concretas con lo diseñado aquí: no hay `realtime_db`; no hay adaptador de Redis, así que **el gateway corre en una sola réplica**; el canal `app` se consulta a notification-service antes de emitir. El **chat entre usuarios sí se está construyendo** como servicio propio (ver [chat-service](../servicios/chat-service.md)): el hub emitirá `chat.message.new` a la sala `user:<destinatario>`.
 
 La comunicación en tiempo real se apoya en **Socket.IO**, desacoplado de la lógica de negocio: los servicios solo **publican eventos** a RabbitMQ; el hub los **consume y empuja** al cliente correcto.
 

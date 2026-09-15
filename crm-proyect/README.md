@@ -47,6 +47,7 @@ Una plataforma tipo **CRM + facturación electrónica**, construida con **micros
 - [product-service](./servicios/product-service.md) — **productos**, categorías, impuestos por producto
 - [tax-service](./servicios/tax-service.md) — **catálogos por país**: IVA, tipos de identificación, tipos de comprobante
 - [billing-service](./servicios/billing-service.md) — **facturación**, secuenciales, comprobantes electrónicos
+- [chat-service](./servicios/chat-service.md) — **mensajería interna** 1-a-1 y grupos entre usuarios de la organización (en construcción)
 - [document-service](./servicios/document-service.md) — **archivos adjuntos**, almacenamiento y gestión de documentos (polimórfico)
 - [fiscal-ecuador](./servicios/fiscal-ecuador.md) — **SRI Ecuador**: clave de acceso, XML, firma XAdES-BES, envío y autorización, RIDE. Construido y desplegado
 - [realtime-service](./servicios/realtime-service.md) — ⚠️ **desfasado**: no existe tal servicio. El socket vive en el api-gateway (`/ws`) y las notificaciones en `notification-service`
