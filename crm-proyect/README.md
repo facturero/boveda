@@ -57,7 +57,7 @@ Una plataforma tipo **CRM + facturación electrónica**, construida con **micros
 - [api-gateway](./servicios/api-gateway.md) — punto único de entrada, routing, propagación de contexto
 - [notification-service](./servicios/notification-service.md) — **la campana y el correo**: catálogo de proveedores por plugin, preferencias por canal
 - [plugin-catalog-service](./servicios/plugin-catalog-service.md) — **qué módulos existen y cuáles tiene contratados cada organización**; el gateway lo consulta en cada ruta
-- [inventory-service](./servicios/inventory-service.md) — bodegas, kardex y costeo (FIFO / promedio). **Construido, sin desplegar**
+- [inventory-service](./servicios/inventory-service.md) — bodegas, kardex y costeo (FIFO / promedio). **Desplegado el 2026-09-15**
 - [outbox-relay](./servicios/outbox-relay.md) — **librería npm**, no un servicio: outbox del productor, reintentos del consumidor y `ActorContext`
 
 ### Punto de venta
@@ -66,7 +66,10 @@ Una plataforma tipo **CRM + facturación electrónica**, construida con **micros
 
 ### Modelo de datos
 
+- [Esquema real del CRM (`crm.dbml`)](./modelo-datos/crm.dbml) — las 87 tablas de los 13 servicios, sacadas de las migraciones; pégalo en <https://dbdiagram.io>. `node modelo-datos/verificar-dbml.mjs` lo compara con las migraciones y avisa si se desfasó
+- [Esquema del POS Kiosko (`pos-kiosko.dbml`)](./modelo-datos/pos-kiosko.dbml) — la base SQLite local de cada caja (13 tablas)
 - [Relaciones globales](./modelo-datos/relaciones-globales.md) — cómo se asocian las entidades entre servicios (IDs de referencia, diagrama ER global)
+- [Esquema DBML antiguo](./modelo-datos/esquema-dbml.md) — versión de diseño, desfasada; vale `crm.dbml`
 
 ### Frontend
 
@@ -74,7 +77,7 @@ Una plataforma tipo **CRM + facturación electrónica**, construida con **micros
 
 ## 🧩 Módulos: lo que pediste + lo que recomiendo añadir
 
-> **Estado al 2026-09-14.** Esta sección era la lista original de módulos. Lo construido desde entonces: facturación electrónica con el SRI ([fiscal-ecuador](./servicios/fiscal-ecuador.md)), bitácora de auditoría, notificaciones, catálogo de plugins con perfiles de negocio, asistente de IA, inventario (sin desplegar) y el [POS](./pos/punto-de-venta.md). Siguen sin construirse: pagos y cuentas por cobrar, listas de precios, reportes y el CRM de ventas.
+> **Estado al 2026-09-16.** Esta sección era la lista original de módulos. Lo construido desde entonces: facturación electrónica con el SRI ([fiscal-ecuador](./servicios/fiscal-ecuador.md)), bitácora de auditoría, notificaciones, catálogo de plugins con perfiles de negocio, asistente de IA, inventario (desplegado el 2026-09-15) y el [POS](./pos/punto-de-venta.md). Siguen sin construirse: pagos y cuentas por cobrar, listas de precios, reportes y el CRM de ventas.
 
 Lo que listaste:
 
@@ -97,7 +100,7 @@ Lo que listaste:
 3. ✅ **Integración con autoridad fiscal** — **hecho para Ecuador**: [fiscal-ecuador](./servicios/fiscal-ecuador.md) y [facturación electrónica](./facturacion-electronica/README.md). Los demás países (DIAN, SAT, SUNAT, SII) siguen siendo adaptadores futuros.
 4. ✅ **Auditoría / bitácora** — hecho: [audit-log-service](./servicios/audit-log-service.md), que consume `#`.
 5. **Pagos y cuentas por cobrar** — registro de pagos, saldos, estados de cuenta del cliente.
-6. ⚠️ **Inventario / stock** — [inventory-service](./servicios/inventory-service.md) construido con kardex y costeo FIFO/promedio, **pendiente de desplegar**.
+6. ✅ **Inventario / stock** — [inventory-service](./servicios/inventory-service.md) con kardex y costeo FIFO/promedio, **desplegado el 2026-09-15**.
 7. **Listas de precios, descuentos y promociones** — precios por organización/cliente/moneda.
 8. **Multimoneda** — necesario al ser multipaís.
 9. ✅ **Notificaciones** (email + campana) — hecho: [notification-service](./servicios/notification-service.md).
@@ -111,7 +114,7 @@ Lo que listaste:
 
 ## ✅ Cobertura: código ↔ documentación
 
-Contrastado pieza por pieza contra el repo de código el **2026-09-14**. Todo lo que hay en el código tiene documento:
+Contrastado pieza por pieza contra el repo de código el **2026-09-14**, y rutas, eventos y dependencias de cada servicio re-verificados el **2026-09-16**. Todo lo que hay en el código tiene documento:
 
 | Código | Documento |
 |---|---|

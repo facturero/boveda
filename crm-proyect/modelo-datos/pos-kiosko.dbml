@@ -1,0 +1,269 @@
+// ============================================================================
+//  POS Kiosko — base de datos local de cada caja (SQLite, Prisma)
+//  Estado al 2026-10-07. Fuente: pos/backend/prisma/schema.prisma.
+//
+//  Cómo leerlo (pégalo en https://dbdiagram.io/d  → Import → DBML):
+//   · Cada caja (el .exe de Windows o el equipo con la ISO) tiene SU PROPIA base,
+//     un archivo SQLite. No hay una base central del POS: las ventas suben al CRM
+//     (billing-service) y de ahí en adelante viven en MySQL (ver crm.dbml).
+//   · Los ids locales son enteros autoincrementales. Lo que viene del CRM guarda su
+//     UUID en `remote_id`, para saber a qué fila del CRM corresponde.
+//   · SQLite no tiene decimales ni JSON nativos: Prisma los guarda como número/texto.
+//   · pos_config, pos_identity y pos_theme tienen UNA sola fila (id = 1).
+//   · Los nombres de columna van como los ve Prisma (camelCase en el código); en
+//     la base física son los mismos nombres de campo.
+// ============================================================================
+
+Project pos_kiosko {
+  database_type: 'SQLite'
+  Note: 'Base local de cada caja POS Kiosko. Estado: 2026-10-07.'
+}
+
+Enum role {
+  ADMIN
+  CASHIER
+}
+Enum sale_status {
+  COMPLETED
+  VOIDED
+}
+Enum payment_method {
+  CASH
+  CARD
+  TRANSFER
+  OTHER
+}
+Enum cash_session_status {
+  OPEN
+  CLOSED
+}
+Enum sync_direction {
+  PULL [note: 'Datos bajados del CRM (productos, categorías, clientes, usuarios)']
+  PUSH [note: 'Datos subidos al CRM (ventas)']
+}
+Enum sync_status {
+  SUCCESS
+  ERROR
+}
+Enum customer_type {
+  PERSON
+  COMPANY
+}
+Enum customer_status {
+  ACTIVE
+  INACTIVE
+}
+Enum address_type {
+  BILLING
+  SHIPPING
+  OTHER
+}
+
+// ---------------------------------------------------------------------------
+//  Personas y ventas
+// ---------------------------------------------------------------------------
+Table users {
+  id integer [pk, increment]
+  remoteId varchar [unique, note: 'auth.users.id en el CRM']
+  name varchar [not null]
+  username varchar [not null, unique, note: 'Para usuarios del CRM = su código de 7 caracteres']
+  email varchar [note: 'Email del CRM (para validar la contraseña); null en usuarios locales']
+  passwordHash varchar [note: 'null = sin contraseña vinculada aún']
+  role role [not null, default: 'CASHIER']
+  permissions varchar [note: 'JSON con los permisos del CRM (unión de sus roles), p. ej. ["invoice:create"]. null = no se sabe']
+  active boolean [not null, default: true]
+  createdAt datetime [not null, default: `now()`]
+}
+
+Table customers {
+  id integer [pk, increment]
+  remoteId varchar [unique, note: 'customer.customers.id']
+  countryCode varchar
+  identificationTypeId varchar [note: 'UUID del tipo en el CRM (informativo)']
+  identification varchar
+  businessName varchar [not null]
+  tradeName varchar
+  email varchar
+  phone varchar
+  type customer_type [not null, default: 'PERSON']
+  status customer_status [not null, default: 'ACTIVE']
+  syncedAt datetime
+  createdAt datetime [not null, default: `now()`]
+  updatedAt datetime [not null]
+}
+
+Table customer_contacts {
+  id integer [pk, increment]
+  remoteId varchar [unique]
+  customerId integer [not null]
+  name varchar [not null]
+  email varchar
+  phone varchar
+  position varchar
+  indexes {
+    customerId
+  }
+}
+
+Table customer_addresses {
+  id integer [pk, increment]
+  remoteId varchar [unique]
+  customerId integer [not null]
+  type address_type [not null, default: 'OTHER']
+  line1 varchar [not null]
+  line2 varchar
+  city varchar
+  province varchar
+  countryCode varchar
+  postalCode varchar
+  isPrimary boolean [not null, default: false]
+  indexes {
+    customerId
+  }
+}
+
+Table categories {
+  id integer [pk, increment]
+  remoteId varchar [unique, note: 'product.categories.id']
+  name varchar [not null, unique]
+}
+
+Table products {
+  id integer [pk, increment]
+  remoteId varchar [unique, note: 'product.products.id']
+  sku varchar [unique]
+  barcode varchar [unique, note: 'Uso futuro: product-service aún no lo maneja']
+  name varchar [not null]
+  description varchar
+  price decimal [not null]
+  currencyCode varchar [not null, default: 'USD']
+  cost decimal [note: 'Reservado: no viene del CRM todavía']
+  stock decimal [not null, default: 0, note: 'Sin control real aún']
+  unit varchar [not null, default: 'unidad']
+  active boolean [not null, default: true]
+  priceIncludesTax boolean [not null, default: false, note: 'true = el precio ya trae el IVA dentro']
+  taxes json [note: 'Impuestos del producto bajados del CRM']
+  imageFileId varchar [note: 'document.file_references.id']
+  imageMime varchar
+  categoryId integer
+  syncedAt datetime
+  createdAt datetime [not null, default: `now()`]
+  updatedAt datetime [not null]
+  indexes {
+    categoryId
+  }
+}
+
+Table cash_sessions {
+  id integer [pk, increment]
+  userId integer [not null]
+  openedAt datetime [not null, default: `now()`]
+  closedAt datetime
+  openingAmount decimal [not null]
+  closingAmount decimal
+  expectedAmount decimal
+  status cash_session_status [not null, default: 'OPEN']
+  notes varchar
+  indexes {
+    userId
+  }
+}
+
+Table sales {
+  id integer [pk, increment]
+  cashSessionId integer [not null]
+  userId integer [not null]
+  customerId integer
+  subtotal decimal [not null]
+  tax decimal [not null, default: 0]
+  discount decimal [not null, default: 0]
+  total decimal [not null]
+  paymentMethod payment_method [not null, default: 'CASH']
+  status sale_status [not null, default: 'COMPLETED']
+  synced boolean [not null, default: false, note: 'false = pendiente de subir al CRM']
+  syncedAt datetime
+  syncError varchar
+  remoteId varchar [note: 'billing.invoices.id cuando el CRM la acepta']
+  createdAt datetime [not null, default: `now()`]
+  indexes {
+    cashSessionId
+    userId
+    customerId
+    createdAt
+    synced
+  }
+}
+
+Table sale_items {
+  id integer [pk, increment]
+  saleId integer [not null]
+  productId integer [not null]
+  quantity decimal [not null]
+  unitPrice decimal [not null, note: 'Precio del catálogo (con IVA si priceIncludesTax)']
+  subtotal decimal [not null]
+  discount decimal [not null, default: 0, note: 'Parte del descuento de la venta en esta línea']
+  taxAmount decimal [not null, default: 0, note: 'Suma de los impuestos de la línea']
+  taxes json [note: 'Desglose: [{ kind, percentage, baseCents, amountCents }]']
+  indexes {
+    saleId
+    productId
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  Sincronización, emparejamiento y tema (una fila cada una, salvo sync_logs)
+// ---------------------------------------------------------------------------
+Table sync_logs {
+  id integer [pk, increment]
+  direction sync_direction [not null]
+  status sync_status [not null]
+  message varchar
+  itemCount integer [not null, default: 0]
+  createdAt datetime [not null, default: `now()`]
+  indexes {
+    createdAt
+  }
+}
+
+Table pos_config {
+  id integer [pk, default: 1, note: 'Siempre 1: una sola fila']
+  organizationId varchar [not null, note: 'organization.organizations.id']
+  establishmentId varchar [not null, note: 'organization.establishments.id']
+  emissionPointId varchar [not null, note: 'organization.emission_points.id']
+  refreshToken varchar [not null, note: 'Se rota en cada refresh; siempre el último válido (auth.device_refresh_tokens)']
+  pairedAt datetime [not null, default: `now()`]
+  updatedAt datetime [not null]
+}
+
+Table pos_identity {
+  id integer [pk, default: 1, note: 'Siempre 1: una sola fila']
+  deviceId varchar [not null, unique, note: 'UUID estable de esta caja = auth.pos_devices.id']
+  createdAt datetime [not null, default: `now()`]
+  updatedAt datetime [not null]
+}
+
+Table pos_theme {
+  id integer [pk, default: 1, note: 'Siempre 1: una sola fila']
+  themeId varchar [note: 'organization.pos_themes.id (null = tema integrado)']
+  name varchar
+  source varchar [not null, default: 'builtin', note: 'point | default | builtin']
+  version integer [not null, default: 0]
+  etag varchar
+  configJson varchar [note: 'Tema ya saneado (pos/backend/src/theme/contract.ts)']
+  assetsJson varchar [not null, default: '[]', note: '[{ role, fileId, mime }]']
+  fetchedAt datetime [not null, default: `now()`]
+  updatedAt datetime [not null]
+}
+
+// ---------------------------------------------------------------------------
+//  Relaciones (todas son FOREIGN KEY reales en SQLite)
+// ---------------------------------------------------------------------------
+Ref: customer_contacts.customerId > customers.id [delete: cascade]
+Ref: customer_addresses.customerId > customers.id [delete: cascade]
+Ref: products.categoryId > categories.id
+Ref: cash_sessions.userId > users.id
+Ref: sales.cashSessionId > cash_sessions.id
+Ref: sales.userId > users.id
+Ref: sales.customerId > customers.id [delete: set null]
+Ref: sale_items.saleId > sales.id [delete: cascade]
+Ref: sale_items.productId > products.id

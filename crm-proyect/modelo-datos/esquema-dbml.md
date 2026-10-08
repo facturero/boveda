@@ -4,6 +4,8 @@
 
 Esquema completo del CRM en **DBML**, basado en este vault y en los servicios construidos. **Base de datos por servicio** → cada servicio es un `schema` en el diagrama. Las referencias **dentro** de un servicio son FK reales; las que **cruzan** servicios son lógicas (por ID, sin FK) y van al final, separadas.
 
+> **Sustituido el 2026-10-07 por [`crm.dbml`](./crm.dbml)** (y [`pos-kiosko.dbml`](./pos-kiosko.dbml) para la caja), generados desde las migraciones de cada servicio y validados con el parser de DBML. Este documento queda solo como referencia del diseño original.
+
 **Cómo verlo:** copia el bloque DBML y pégalo en <https://dbdiagram.io>.
 
 > ⚠️ **Desfasado respecto al código (revisado el 2026-09-14).** El DBML de abajo sigue siendo útil como panorama, pero le faltan servicios enteros y `realtime` no existe. Bases **reales** hoy:

@@ -1,0 +1,1668 @@
+// ============================================================================
+//  CRM Facturero — modelo de datos de TODOS los microservicios
+//  Estado al 2026-10-07. Fuente: las migraciones de cada servicio (lo que de verdad
+//  existe en MySQL), cotejadas con los modelos Sequelize.
+//
+//  Cómo leerlo (pégalo en https://dbdiagram.io/d  → Import → DBML):
+//   · Cada microservicio tiene SU PROPIA base de datos (<servicio>_db) y no se comparten
+//     tablas. Por eso cada servicio es un *schema* de DBML y un *TableGroup*.
+//   · Los nombres se repiten entre servicios (organizations, products, tax_rates,
+//     organization_plugins, identification_types, outbox_messages...): son COPIAS o
+//     "read models" que cada servicio mantiene a partir de eventos, no la misma tabla.
+//   · Entre servicios NO hay claves foráneas (bases distintas): lo que une un servicio
+//     con otro son UUID guardados como CHAR(36). Esas uniones están al final, en la
+//     sección «RELACIONES LÓGICAS ENTRE SERVICIOS». Si el diagrama se ve cargado,
+//     comenta ese bloque entero.
+//   · Dentro de un servicio, algunas relaciones existen en los modelos pero NO tienen
+//     FOREIGN KEY en MySQL (billing, auth.user_roles.organization_id, etc.). Van igual
+//     en la sección «RELACIONES DENTRO DEL SERVICIO», marcadas con "sin FK en BD".
+//   · Importes: siempre en centavos (BIGINT *_cents). Ids: UUID en CHAR(36).
+//   · Todos los servicios con eventos usan el patrón outbox (outbox_messages) para
+//     publicar a RabbitMQ y processed_events para no procesar dos veces un evento.
+//   · No hay tablas en: api-gateway (sin BD), outbox-relay (librería) ni observabilidad.
+//   · `node verificar-dbml.mjs` compara este archivo con las migraciones y avisa de lo que se desfasó.
+//   · POS Kiosko (SQLite local en cada caja) está en pos-kiosko.dbml.
+// ============================================================================
+
+Project facturero_crm {
+  database_type: 'MySQL'
+  Note: '''
+  CRM con facturación electrónica (Ecuador) en microservicios.
+  Una base de datos por servicio. Estado: 2026-10-07.
+  '''
+}
+
+// ---------------------------------------------------------------------------
+//  auth-service  (auth_db) — identidad, roles y permisos
+// ---------------------------------------------------------------------------
+Enum auth.user_status {
+  active
+  disabled
+}
+Enum auth.membership_status {
+  active
+  invited
+  disabled
+}
+
+Table auth.users {
+  id char(36) [pk]
+  email varchar(255) [not null, unique]
+  username varchar(7) [not null, unique, note: 'Código de 7 caracteres (A-Z0-9): el nombre de usuario en los POS']
+  identification varchar(20) [unique, note: 'Solo el número (cédula/RUC/pasaporte). El tipo va en identification_type']
+  identification_type varchar(10) [note: 'cedula | ruc | passport | dni']
+  full_name varchar(255)
+  avatar_file_id char(36) [note: 'document.file_references.id']
+  status auth.user_status [not null, default: 'active']
+  is_platform_admin boolean [not null, default: false]
+  permissions_version integer [not null, default: 0, note: 'Sube al cambiar roles/permisos: invalida los tokens ya emitidos']
+  created_at datetime [not null]
+  updated_at datetime [not null]
+}
+
+Table auth.credentials {
+  id char(36) [pk]
+  user_id char(36) [not null, unique]
+  email varchar(255) [not null, unique]
+  password_hash varchar(255) [note: 'null = cuenta creada solo con Google']
+  email_verified boolean [not null, default: false]
+  status auth.user_status [not null, default: 'active']
+  created_at datetime [not null]
+  updated_at datetime [not null]
+}
+
+Table auth.oauth_accounts {
+  id char(36) [pk]
+  credential_id char(36) [not null]
+  provider varchar(20) [not null]
+  provider_user_id varchar(255) [not null]
+  email varchar(255) [not null]
+  created_at datetime [not null]
+  indexes {
+    (provider, provider_user_id) [unique]
+  }
+}
+
+Table auth.refresh_tokens {
+  id char(36) [pk]
+  credential_id char(36) [not null]
+  token_hash varchar(255) [not null, unique]
+  expires_at datetime [not null]
+  revoked_at datetime
+  replaced_by char(36)
+  user_agent varchar(255)
+  ip varchar(45)
+  created_at datetime [not null]
+  indexes {
+    credential_id
+  }
+}
+
+Table auth.password_reset_tokens {
+  id char(36) [pk]
+  user_id char(36) [not null]
+  token_hash varchar(255) [not null, unique]
+  expires_at datetime [not null]
+  consumed_at datetime
+  created_at datetime [not null]
+  indexes {
+    user_id
+  }
+}
+
+// Copia mínima de la organización (la dueña es organization-service): solo lo que hace falta para el token.
+Table auth.organizations {
+  id char(36) [pk]
+  name varchar(255)
+  country_code varchar(2)
+  owner_id char(36) [note: 'auth.users.id del fundador']
+  created_at datetime [not null]
+  updated_at datetime [not null]
+}
+
+Table auth.organization_memberships {
+  id char(36) [pk]
+  user_id char(36) [not null]
+  organization_id char(36) [not null]
+  status auth.membership_status [not null, default: 'active']
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (user_id, organization_id) [unique]
+  }
+}
+
+Table auth.permissions {
+  id char(36) [pk]
+  code varchar(100) [not null, unique, note: 'p. ej. invoice:create, user:assign_role']
+  resource varchar(50) [not null]
+  action varchar(50) [not null]
+  description varchar(255)
+}
+
+Table auth.roles {
+  id char(36) [pk]
+  organization_id char(36) [note: 'null = rol de sistema (inmutable)']
+  name varchar(100) [not null]
+  description varchar(255)
+  is_system boolean [not null, default: false]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (organization_id, name) [unique]
+  }
+}
+
+Table auth.role_permissions {
+  role_id char(36) [pk]
+  permission_id char(36) [pk]
+}
+
+Table auth.user_roles {
+  id char(36) [pk]
+  user_id char(36) [not null]
+  organization_id char(36) [not null]
+  role_id char(36) [not null]
+  created_at datetime [not null]
+  indexes {
+    (user_id, organization_id, role_id) [unique]
+  }
+}
+
+Table auth.user_establishments {
+  user_id char(36) [pk]
+  establishment_id char(36) [pk, note: 'organization.establishments.id']
+  created_at datetime [not null]
+  indexes {
+    establishment_id
+  }
+}
+
+Table auth.pos_devices {
+  id char(36) [pk, note: 'deviceId que genera el POS en su primer arranque']
+  emission_point_id char(36) [not null, note: 'organization.emission_points.id']
+  organization_id char(36) [not null]
+  label varchar(255)
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    organization_id
+  }
+}
+
+Table auth.device_refresh_tokens {
+  id char(36) [pk]
+  pos_device_id char(36) [not null]
+  token_hash varchar(255) [not null, unique]
+  expires_at datetime [not null]
+  revoked_at datetime
+  replaced_by char(36)
+  created_at datetime [not null]
+  indexes {
+    pos_device_id
+  }
+}
+
+Table auth.trusted_ips {
+  id char(36) [pk]
+  ip varchar(45) [not null, unique, note: 'IP exacta o CIDR; el gateway la usa para el límite de peticiones']
+  label varchar(255)
+  enabled boolean [not null, default: true]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    enabled
+  }
+}
+
+Table auth.outbox_messages {
+  id char(36) [pk]
+  aggregate_type varchar(50) [not null]
+  aggregate_id char(36) [not null]
+  type varchar(100) [not null]
+  payload json [not null]
+  occurred_at datetime [not null]
+  processed_at datetime
+  indexes {
+    processed_at
+  }
+}
+
+Table auth.processed_events {
+  id varchar(36) [pk]
+  event_type varchar(100) [not null]
+  routing_key varchar(200) [not null]
+  payload text
+  status varchar(20) [not null, default: 'processed']
+  last_error text
+  processed_at datetime [not null]
+}
+
+// ---------------------------------------------------------------------------
+//  organization-service  (organization_db) — empresa, establecimientos, puntos de emisión
+// ---------------------------------------------------------------------------
+Enum organization.org_status {
+  active
+  suspended
+}
+Enum organization.active_status {
+  active
+  inactive
+}
+Enum organization.emission_point_type {
+  web
+  pos
+}
+
+Table organization.organizations {
+  id char(36) [pk]
+  legal_name varchar(255) [note: 'Razón social']
+  trade_name varchar(255) [note: 'Nombre comercial']
+  tax_id varchar(20) [note: 'RUC en Ecuador']
+  country_code varchar(2)
+  status organization.org_status [not null, default: 'active']
+  settings json
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (country_code, tax_id) [unique]
+  }
+}
+
+Table organization.establishments {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  code varchar(3) [not null, note: 'Código SRI de 3 dígitos (001...)']
+  name varchar(255) [not null]
+  country_code varchar(2) [not null]
+  address varchar(255)
+  is_main boolean [not null, default: false]
+  status organization.active_status [not null, default: 'active']
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (organization_id, code) [unique]
+  }
+}
+
+Table organization.emission_points {
+  id char(36) [pk]
+  establishment_id char(36) [not null]
+  organization_id char(36) [not null]
+  code varchar(3) [not null]
+  name varchar(255)
+  status organization.active_status [not null, default: 'active']
+  type organization.emission_point_type [not null, default: 'web', note: 'pos = caja POS Kiosko emparejable']
+  totp_secret varchar(64) [note: 'Secreto del código de emparejamiento del POS']
+  paired_at datetime
+  paired_device_id char(36) [note: 'auth.pos_devices.id del equipo emparejado']
+  pos_theme_id char(36)
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (establishment_id, code) [unique]
+    pos_theme_id
+  }
+}
+
+Table organization.pos_themes {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  name varchar(80) [not null]
+  config json [not null, note: 'Tema visual del POS (colores, logo...)']
+  schema_version integer [not null, default: 1]
+  version integer [not null, default: 1, note: 'Sube en cada cambio; el POS compara para saber si bajar el tema']
+  is_default boolean [not null, default: false]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    organization_id
+    (organization_id, name) [unique]
+  }
+}
+
+Table organization.organization_countries {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  country_code varchar(2) [not null]
+  enabled boolean [not null, default: true]
+  indexes {
+    (organization_id, country_code) [unique]
+  }
+}
+
+Table organization.countries {
+  code varchar(2) [pk]
+  name varchar(100)
+  currency_code varchar(3)
+  enabled boolean [not null, default: false]
+  updated_at datetime [not null]
+}
+
+Table organization.outbox_messages {
+  id char(36) [pk]
+  aggregate_type varchar(50) [not null]
+  aggregate_id char(36) [not null]
+  type varchar(100) [not null]
+  payload json [not null]
+  occurred_at datetime [not null]
+  processed_at datetime
+  indexes {
+    processed_at
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  tax-service  (tax_db) — catálogo fiscal por país
+// ---------------------------------------------------------------------------
+Enum tax.tax_kind {
+  vat
+  withholding_iva
+  withholding_rent
+  special
+}
+
+Table tax.countries {
+  code char(2) [pk]
+  name varchar(100) [not null]
+  currency_code char(3) [not null]
+  decimals integer [not null, default: 2]
+  enabled boolean [not null, default: true]
+}
+
+Table tax.tax_rates {
+  id char(36) [pk]
+  country_code char(2) [not null]
+  code varchar(20) [not null]
+  name varchar(100) [not null]
+  percentage decimal(6,2) [not null]
+  kind tax.tax_kind [not null]
+  is_default boolean [not null, default: false]
+  indexes {
+    (country_code, code) [unique]
+  }
+}
+
+Table tax.identification_types {
+  id char(36) [pk]
+  country_code char(2) [not null]
+  code varchar(20) [not null, note: 'cedula, ruc, pasaporte...']
+  name varchar(100) [not null]
+  regex varchar(255) [note: 'Validación del formato']
+  indexes {
+    (country_code, code) [unique]
+  }
+}
+
+Table tax.document_types {
+  id char(36) [pk, note: 'UUID determinista derivado de "EC:<código>"']
+  country_code char(2) [not null]
+  code varchar(20) [not null, note: '01 factura, 04 nota de crédito, 05 débito, 06 guía, 07 retención']
+  name varchar(100) [not null]
+  indexes {
+    (country_code, code) [unique]
+  }
+}
+
+Table tax.outbox_messages {
+  id char(36) [pk]
+  aggregate_type varchar(50) [not null]
+  aggregate_id char(36) [not null]
+  type varchar(100) [not null]
+  payload json [not null]
+  occurred_at datetime [not null]
+  processed_at datetime
+  indexes {
+    processed_at
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  customer-service  (customer_db) — clientes
+// ---------------------------------------------------------------------------
+Enum customer.customer_type {
+  person
+  company
+}
+Enum customer.active_status {
+  active
+  inactive
+}
+Enum customer.address_type {
+  billing
+  shipping
+  other
+}
+
+Table customer.customers {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  country_code varchar(2) [not null]
+  identification_type_id char(36)
+  identification varchar(30)
+  business_name varchar(255) [not null]
+  trade_name varchar(255)
+  email varchar(255)
+  phone varchar(30)
+  type customer.customer_type [not null]
+  status customer.active_status [not null, default: 'active']
+  metadata json
+  image_file_id char(36) [note: 'document.file_references.id']
+  is_system boolean [not null, default: false, note: 'true = «Consumidor final», no editable']
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (organization_id, identification) [unique]
+    (organization_id, status)
+    (organization_id, created_at, id) [name: 'customers_org_created']
+  }
+}
+
+Table customer.contacts {
+  id char(36) [pk]
+  customer_id char(36) [not null]
+  name varchar(255) [not null]
+  email varchar(255)
+  phone varchar(30)
+  position varchar(100)
+  created_at datetime [not null]
+  updated_at datetime [not null]
+}
+
+Table customer.addresses {
+  id char(36) [pk]
+  customer_id char(36) [not null]
+  type customer.address_type [not null, default: 'other']
+  line1 varchar(255) [not null]
+  line2 varchar(255)
+  city varchar(100)
+  province varchar(100)
+  country_code varchar(2)
+  postal_code varchar(20)
+  is_primary boolean [not null, default: false]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+}
+
+Table customer.tags {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  name varchar(100) [not null]
+  color varchar(20)
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (organization_id, name) [unique]
+  }
+}
+
+Table customer.customer_tags {
+  customer_id char(36) [pk]
+  tag_id char(36) [pk]
+}
+
+// Copia local del catálogo de tax.identification_types.
+Table customer.identification_types {
+  id char(36) [pk]
+  country_code varchar(2) [not null]
+  code varchar(20) [not null]
+  name varchar(100)
+  regex varchar(255)
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (country_code, code) [unique]
+  }
+}
+
+Table customer.outbox_messages {
+  id char(36) [pk]
+  aggregate_type varchar(50) [not null]
+  aggregate_id char(36) [not null]
+  type varchar(100) [not null]
+  payload json [not null]
+  occurred_at datetime [not null]
+  processed_at datetime
+  indexes {
+    processed_at
+  }
+}
+
+Table customer.processed_events {
+  id char(36) [pk]
+  event_type varchar(100)
+  routing_key varchar(200)
+  payload text
+  status varchar(20) [not null, default: 'processed']
+  last_error text
+  processed_at datetime [not null]
+}
+
+// ---------------------------------------------------------------------------
+//  product-service  (product_db) — catálogo de productos
+// ---------------------------------------------------------------------------
+Enum product.active_status {
+  active
+  inactive
+}
+Enum product.product_type {
+  good
+  service
+}
+Enum product.valuation_method {
+  weighted_average
+  fifo
+}
+
+Table product.categories {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  name varchar(255) [not null]
+  description varchar(255)
+  parent_id char(36) [note: 'Categoría padre (árbol)']
+  status product.active_status [not null, default: 'active']
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (organization_id, name, parent_id) [unique]
+  }
+}
+
+Table product.units {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  code varchar(20) [not null]
+  name varchar(100) [not null]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (organization_id, code) [unique]
+  }
+}
+
+Table product.products {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  sku varchar(64)
+  name varchar(255) [not null]
+  description text
+  type product.product_type [not null, default: 'good']
+  category_id char(36)
+  unit_id char(36)
+  price_cents bigint [not null, default: 0]
+  currency_code char(3) [not null, default: 'USD']
+  price_includes_tax boolean [not null, default: false]
+  track_stock boolean [not null, default: false]
+  allow_negative_stock boolean [not null, default: false, note: 'true = factura aunque no haya stock (solo alerta)']
+  valuation_method product.valuation_method [not null, default: 'weighted_average']
+  status product.active_status [not null, default: 'active']
+  metadata json
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (organization_id, sku) [unique]
+    (organization_id, status)
+    (organization_id, created_at, id) [name: 'products_org_created']
+  }
+}
+
+Table product.product_taxes {
+  id char(36) [pk]
+  product_id char(36) [not null]
+  tax_rate_id char(36) [not null, note: 'tax.tax_rates.id']
+  kind varchar(30) [not null]
+  indexes {
+    (product_id, tax_rate_id) [unique]
+  }
+}
+
+Table product.product_images {
+  id char(36) [pk]
+  product_id char(36) [not null]
+  organization_id char(36) [not null]
+  file_id char(36) [not null, note: 'document.file_references.id']
+  alt varchar(255)
+  is_primary boolean [not null, default: false]
+  position integer [not null, default: 0]
+  created_at datetime [not null]
+  indexes {
+    (product_id, file_id) [unique]
+    (product_id, is_primary)
+  }
+}
+
+Table product.product_establishments {
+  product_id char(36) [pk]
+  establishment_id char(36) [pk, note: 'organization.establishments.id']
+  created_at datetime [not null]
+  indexes {
+    establishment_id
+  }
+}
+
+Table product.outbox_messages {
+  id char(36) [pk]
+  aggregate_type varchar(50) [not null]
+  aggregate_id char(36) [not null]
+  type varchar(100) [not null]
+  payload json [not null]
+  occurred_at datetime [not null]
+  processed_at datetime
+  indexes {
+    processed_at
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  inventory-service  (inventory_db) — existencias, kárdex y valoración
+// ---------------------------------------------------------------------------
+Enum inventory.active_status {
+  active
+  inactive
+}
+Enum inventory.product_type {
+  good
+  service
+}
+Enum inventory.valuation_method {
+  weighted_average
+  fifo
+}
+Enum inventory.movement_type {
+  purchase_in
+  sale_out
+  transfer_out
+  transfer_in
+  adjustment_in
+  adjustment_out
+  reservation
+  release
+  opening_balance
+}
+Enum inventory.accounting_nature {
+  inventory_in
+  inventory_gain
+  cogs
+  expense
+  shrinkage
+  internal_transfer
+}
+Enum inventory.reservation_status {
+  active
+  confirmed
+  released
+  expired
+}
+Enum inventory.plugin_status {
+  active
+  disabled
+}
+
+Table inventory.warehouses {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  establishment_id char(36) [note: 'organization.establishments.id (una bodega por establecimiento)']
+  code varchar(20) [not null]
+  name varchar(255) [not null]
+  address varchar(255)
+  is_default boolean [not null, default: false, note: 'Solo una por organización (columna generada default_org_id + índice único)']
+  status inventory.active_status [not null, default: 'active']
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (organization_id, code) [unique]
+    (organization_id, establishment_id) [unique]
+  }
+}
+
+Table inventory.stock_positions {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  product_id char(36) [not null]
+  warehouse_id char(36) [not null]
+  quantity_on_hand decimal(18,4) [not null, default: 0]
+  quantity_reserved decimal(18,4) [not null, default: 0]
+  quantity_available decimal(18,4) [not null, default: 0]
+  average_cost_cents bigint [not null, default: 0]
+  currency_code char(3) [not null, default: 'USD']
+  updated_at datetime [not null]
+  indexes {
+    (product_id, warehouse_id) [unique]
+    (organization_id, product_id)
+  }
+}
+
+Table inventory.stock_movements {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  product_id char(36) [not null]
+  warehouse_id char(36) [not null]
+  type inventory.movement_type [not null]
+  quantity decimal(18,4) [not null]
+  unit_cost_cents bigint
+  total_cost_cents bigint
+  currency_code char(3) [not null, default: 'USD']
+  reference_type varchar(30) [note: 'Documento origen (p. ej. invoice); polimórfico junto a reference_id']
+  reference_id char(36)
+  accounting_nature inventory.accounting_nature [not null]
+  reason_code varchar(30)
+  lot_id char(36) [note: 'Reservado para lotes (módulo «Pronto»)']
+  notes text
+  created_by char(36) [not null, note: 'auth.users.id']
+  created_at datetime [not null]
+  indexes {
+    (product_id, warehouse_id, created_at)
+    (reference_type, reference_id)
+    (organization_id, accounting_nature, created_at)
+  }
+}
+
+Table inventory.stock_layers {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  product_id char(36) [not null]
+  warehouse_id char(36) [not null]
+  entry_movement_id char(36) [not null]
+  quantity_remaining decimal(18,4) [not null]
+  unit_cost_cents bigint [not null]
+  currency_code char(3) [not null]
+  entered_at datetime [not null]
+  lot_id char(36)
+  indexes {
+    (product_id, warehouse_id, quantity_remaining, entered_at) [name: 'stock_layers_active_queue']
+  }
+}
+
+Table inventory.reservations {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  product_id char(36) [not null]
+  warehouse_id char(36) [not null]
+  quantity decimal(18,4) [not null]
+  reference_type varchar(30) [not null]
+  reference_id char(36) [not null]
+  status inventory.reservation_status [not null, default: 'active']
+  expires_at datetime
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (reference_type, reference_id)
+    (product_id, warehouse_id, status)
+  }
+}
+
+// Copia de product.products (solo lo que inventario necesita), mantenida por eventos.
+Table inventory.products {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  name varchar(255)
+  sku varchar(64)
+  type inventory.product_type
+  track_stock boolean [not null, default: false]
+  allow_negative_stock boolean [not null, default: false]
+  valuation_method inventory.valuation_method [not null, default: 'weighted_average']
+  status inventory.active_status
+  inventory_account_code varchar(20)
+  cogs_account_code varchar(20)
+  expense_account_code varchar(20)
+}
+
+// Copia de plugin_catalog.organization_plugins: dice si la organización tiene activo el módulo de inventario.
+Table inventory.organization_plugins {
+  organization_id char(36) [not null]
+  plugin_code varchar(60) [not null]
+  status inventory.plugin_status [not null]
+  updated_at datetime [not null]
+  indexes {
+    (organization_id, plugin_code) [unique]
+  }
+}
+
+Table inventory.inventory_gaps {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  started_at datetime [not null]
+  ended_at datetime
+  skipped_movements integer [not null, default: 0, note: 'Ventas facturadas mientras el inventario estaba apagado']
+}
+
+Table inventory.outbox_messages {
+  id char(36) [pk]
+  aggregate_type varchar(50) [not null]
+  aggregate_id char(36) [not null]
+  type varchar(100) [not null]
+  payload json [not null]
+  occurred_at datetime [not null]
+  processed_at datetime
+  indexes {
+    processed_at
+  }
+}
+
+Table inventory.processed_events {
+  id char(36) [pk]
+  event_type varchar(100) [not null]
+  routing_key varchar(200) [not null]
+  payload json [not null]
+  status varchar(20) [not null, default: 'processed']
+  last_error text
+  processed_at datetime [not null]
+}
+
+// ---------------------------------------------------------------------------
+//  billing-service  (billing_db) — facturas (negocio, no fiscal)
+// ---------------------------------------------------------------------------
+Enum billing.invoice_status {
+  draft
+  issued
+  voided
+}
+
+Table billing.invoices {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  country_code varchar(2) [not null, default: 'EC']
+  document_type_id char(36) [not null, note: 'tax.document_types.id']
+  number varchar(30)
+  establishment_id char(36) [note: 'organization.establishments.id']
+  emission_point_id char(36) [note: 'organization.emission_points.id']
+  customer_id char(36) [not null, note: 'customer.customers.id']
+  customer_snapshot json [note: 'Copia de los datos del cliente al emitir']
+  issuer_snapshot json [note: 'Copia de los datos del emisor al emitir']
+  issue_date datetime
+  currency_code char(3) [not null, default: 'USD']
+  subtotal_cents bigint [not null, default: 0]
+  tax_total_cents bigint [not null, default: 0]
+  total_cents bigint [not null, default: 0]
+  status billing.invoice_status [not null, default: 'draft']
+  voided_at datetime
+  voided_reason varchar(255)
+  related_invoice_id char(36) [note: 'Nota de crédito: factura que modifica']
+  credit_note_reason varchar(300)
+  pos_terminal_id varchar(64) [note: 'Venta que vino de un POS Kiosko']
+  pos_sale_id varchar(64)
+  pos_totals_diff_cents bigint [note: 'Diferencia entre el total del POS y el recalculado']
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (organization_id, pos_terminal_id, pos_sale_id) [unique, name: 'uniq_invoices_pos_sale']
+  }
+}
+
+Table billing.invoice_lines {
+  id char(36) [pk]
+  invoice_id char(36) [not null]
+  product_id char(36) [not null, note: 'product.products.id']
+  product_snapshot json
+  description varchar(255) [not null]
+  quantity decimal(18,6) [not null]
+  unit_price_cents bigint [not null]
+  discount_cents bigint [not null, default: 0]
+  subtotal_cents bigint [not null]
+}
+
+Table billing.line_taxes {
+  id char(36) [pk]
+  invoice_line_id char(36) [not null]
+  tax_rate_id char(36) [not null, note: 'tax.tax_rates.id']
+  kind varchar(50) [not null]
+  rate_snapshot varchar(20) [not null]
+  base_cents bigint [not null]
+  amount_cents bigint [not null]
+}
+
+Table billing.invoice_tax_totals {
+  id char(36) [pk]
+  invoice_id char(36) [not null]
+  kind varchar(50) [not null]
+  rate_snapshot varchar(20) [not null]
+  base_cents bigint [not null]
+  amount_cents bigint [not null]
+}
+
+Table billing.sequences {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  country_code varchar(2) [not null, default: 'EC']
+  establishment_id char(36) [not null]
+  emission_point_id char(36) [not null]
+  document_type_id char(36) [not null]
+  current_value bigint [not null, default: 0, note: 'Último secuencial usado']
+  indexes {
+    (organization_id, emission_point_id, document_type_id) [unique]
+  }
+}
+
+Table billing.outbox_messages {
+  id char(36) [pk]
+  aggregate_type varchar(50) [not null]
+  aggregate_id char(36) [not null]
+  type varchar(100) [not null]
+  payload json [not null]
+  occurred_at datetime [not null]
+  processed_at datetime
+  indexes {
+    processed_at
+  }
+}
+
+Table billing.processed_events {
+  id char(36) [pk]
+  event_type varchar(100)
+  routing_key varchar(200)
+  payload text
+  status varchar(20) [not null, default: 'processed']
+  last_error text
+  processed_at datetime [not null]
+}
+
+// ---------------------------------------------------------------------------
+//  fiscal-ecuador  (fiscal_db) — comprobantes electrónicos del SRI
+// ---------------------------------------------------------------------------
+Enum fiscal.fiscal_status {
+  pending
+  sent
+  authorized
+  rejected
+  error
+}
+Enum fiscal.certificate_status {
+  active
+  expired
+  revoked
+}
+
+Table fiscal.fiscal_invoices {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  billing_invoice_id char(36) [not null, unique, note: 'billing.invoices.id']
+  document_type char(2) [not null, default: '01', note: '01 factura, 04 nota de crédito']
+  number varchar(30) [not null]
+  access_key char(49) [not null, unique, note: 'Clave de acceso del SRI']
+  status fiscal.fiscal_status [not null, default: 'pending']
+  authorization_number varchar(49)
+  authorization_date datetime
+  sri_response json
+  signed_xml_file_id char(36) [note: 'document.file_references.id']
+  authorized_xml_file_id char(36) [note: 'document.file_references.id']
+  retry_count integer [not null, default: 0]
+  last_error text
+  original_payload json
+  next_check_at datetime [note: 'Cuándo volver a consultar al SRI']
+  billing_voided_at datetime
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (status, next_check_at) [name: 'fiscal_invoices_status_next_check_at']
+    (organization_id, document_type, number) [unique, name: 'fiscal_invoices_org_type_number_unique']
+    (organization_id, created_at)
+  }
+}
+
+Table fiscal.certificates {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  alias varchar(100) [not null]
+  p12_file_id char(36) [not null, note: 'document.file_references.id (el .p12)']
+  password_encrypted text [not null]
+  valid_from date [not null]
+  valid_until date [not null]
+  status fiscal.certificate_status [not null, default: 'active']
+  created_at datetime [not null]
+  indexes {
+    (organization_id, status)
+  }
+}
+
+Table fiscal.outbox_messages {
+  id char(36) [pk]
+  aggregate_type varchar(50) [not null]
+  aggregate_id char(36) [not null]
+  type varchar(100) [not null]
+  payload json [not null]
+  occurred_at datetime [not null]
+  processed_at datetime
+}
+
+Table fiscal.processed_events {
+  id char(36) [pk]
+  event_type varchar(100) [not null, default: '']
+  routing_key varchar(200) [not null, default: '']
+  payload json
+  status varchar(30) [not null, default: 'processed']
+  last_error text
+  processed_at datetime [not null]
+}
+
+// ---------------------------------------------------------------------------
+//  document-service  (document_db) — metadatos de archivos (los bytes van en MinIO)
+// ---------------------------------------------------------------------------
+Table document.file_references {
+  id char(36) [pk]
+  organization_id char(36) [note: 'null en archivos anteriores a la separación por organización']
+  resource_type varchar(100) [not null, note: 'Qué tiene el archivo: user, product, customer, certificate...']
+  resource_id varchar(100) [not null]
+  category varchar(100) [not null]
+  original_name varchar(255) [not null]
+  mime_type varchar(255) [not null]
+  size bigint [not null]
+  storage_key varchar(1024) [not null, note: 'Ruta del objeto en MinIO']
+  storage_bucket varchar(255) [not null]
+  checksum varchar(128) [not null, default: '']
+  status varchar(20) [not null, default: 'pending']
+  description varchar(500)
+  expires_at datetime
+  parent_id char(36) [note: 'Versión/derivado (p. ej. miniatura) de otro archivo']
+  uploaded_by varchar(100) [not null]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (resource_type, resource_id) [name: 'idx_resource']
+    status [name: 'idx_status']
+    parent_id [name: 'idx_parent']
+    expires_at [name: 'idx_expires']
+    (organization_id, resource_type, resource_id) [name: 'file_references_org_resource']
+  }
+}
+
+Table document.outbox_messages {
+  id char(36) [pk]
+  aggregate_type varchar(50) [not null]
+  aggregate_id char(36) [not null]
+  type varchar(100) [not null]
+  payload json [not null]
+  occurred_at datetime [not null]
+  processed_at datetime
+  indexes {
+    processed_at
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  plugin-catalog-service  (plugin_catalog_db) — módulos, perfiles de negocio y activaciones
+// ---------------------------------------------------------------------------
+Enum plugin_catalog.build_status {
+  disponible
+  en_construccion
+  descontinuado
+}
+Enum plugin_catalog.activation_source {
+  direct
+  dependency
+}
+Enum plugin_catalog.activation_status {
+  active
+  disabled
+}
+Enum plugin_catalog.request_status {
+  requested
+  quoted
+  created
+  rejected
+}
+Enum plugin_catalog.recommendation {
+  essential
+  suggested
+}
+Enum plugin_catalog.profile_decision {
+  selected
+  skipped
+}
+
+Table plugin_catalog.plugins {
+  id char(36) [pk]
+  code varchar(100) [not null, unique]
+  name varchar(255) [not null]
+  category varchar(100) [not null]
+  description text [not null]
+  image_url varchar(500)
+  build_status plugin_catalog.build_status [not null, default: 'disponible', note: 'Lo que la landing anuncia como «Disponible» o «Pronto»']
+  price_cents bigint [not null]
+  currency char(3) [not null, default: 'USD']
+  is_active boolean [not null, default: true]
+  is_core boolean [not null, default: false, note: 'Incluido siempre, no se activa por separado']
+  created_for_organization_id char(36) [note: 'Plugin a medida de una sola organización']
+  based_on_plugin_id char(36)
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    created_for_organization_id
+    is_core
+  }
+}
+
+Table plugin_catalog.plugin_translations {
+  plugin_id char(36) [pk]
+  locale varchar(5) [pk]
+  name varchar(255) [not null]
+  category varchar(100) [not null]
+  description text [not null]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    locale
+  }
+}
+
+Table plugin_catalog.plugin_dependencies {
+  plugin_id char(36) [pk]
+  depends_on_plugin_id char(36) [pk, note: 'CHECK: no puede depender de sí mismo']
+  auto_activate boolean [not null, default: true]
+}
+
+Table plugin_catalog.organization_plugins {
+  organization_id char(36) [pk]
+  plugin_id char(36) [pk]
+  activation_source plugin_catalog.activation_source [not null]
+  required_by_plugin_id char(36) [note: 'Si se activó por dependencia, de qué plugin']
+  status plugin_catalog.activation_status [not null, default: 'active']
+  activated_at datetime [not null]
+  deactivated_at datetime
+}
+
+Table plugin_catalog.plugin_custom_requests {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  description text [not null]
+  based_on_plugin_ids json [not null]
+  status plugin_catalog.request_status [not null, default: 'requested']
+  resulting_plugin_id char(36)
+  quoted_price_cents bigint
+  rejection_reason text
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    organization_id
+  }
+}
+
+Table plugin_catalog.business_profiles {
+  id char(36) [pk]
+  code varchar(100) [not null, unique]
+  name varchar(255) [not null]
+  description text [not null]
+  icon varchar(100) [not null, default: 'mdi-storefront-outline']
+  sort_order integer [not null, default: 0]
+  is_active boolean [not null, default: true]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    is_active
+  }
+}
+
+Table plugin_catalog.business_profile_plugins {
+  business_profile_id char(36) [pk]
+  plugin_id char(36) [pk]
+  recommendation plugin_catalog.recommendation [not null]
+  sort_order integer [not null, default: 0]
+}
+
+Table plugin_catalog.business_profile_translations {
+  business_profile_id char(36) [pk]
+  locale varchar(5) [pk]
+  name varchar(255) [not null]
+  description text [not null]
+}
+
+Table plugin_catalog.organization_business_profiles {
+  organization_id char(36) [pk]
+  business_profile_id char(36)
+  status plugin_catalog.profile_decision [not null, default: 'selected']
+  decided_by_user_id char(36) [note: 'auth.users.id']
+  decided_at datetime [not null]
+  updated_at datetime [not null]
+}
+
+Table plugin_catalog.outbox_messages {
+  id char(36) [pk]
+  aggregate_type varchar(50) [not null]
+  aggregate_id char(36) [not null]
+  type varchar(100) [not null]
+  payload json [not null]
+  occurred_at datetime [not null]
+  processed_at datetime
+  indexes {
+    processed_at
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  notification-service  (notification_db) — campana y preferencias
+// ---------------------------------------------------------------------------
+Table notification.notifications {
+  id char(36) [pk]
+  user_id char(36) [not null, note: 'auth.users.id']
+  organization_id char(36)
+  provider_code varchar(100) [not null, note: 'Qué tipo de aviso es']
+  payload json
+  is_read boolean [not null, default: false]
+  created_at datetime [not null, default: `CURRENT_TIMESTAMP`]
+  indexes {
+    (user_id, is_read, created_at) [name: 'idx_notifications_user_read_created']
+  }
+}
+
+Table notification.notification_preferences {
+  user_id char(36) [pk]
+  provider_code varchar(100) [pk]
+  channel varchar(20) [pk, note: 'p. ej. in_app, email']
+  enabled boolean [not null, default: true]
+  updated_at datetime [not null, default: `CURRENT_TIMESTAMP`]
+}
+
+Table notification.processed_events {
+  id varchar(36) [pk]
+  event_type varchar(100) [not null]
+  routing_key varchar(200) [not null]
+  payload text
+  status varchar(30) [not null, default: 'processed']
+  last_error text
+  processed_at datetime [not null, default: `CURRENT_TIMESTAMP`]
+}
+
+// ---------------------------------------------------------------------------
+//  audit-log-service  (audit_db) — bitácora de auditoría
+// ---------------------------------------------------------------------------
+Table audit.audit_logs {
+  id char(36) [pk]
+  organization_id char(36)
+  user_id char(36) [note: 'auth.users.id de quien hizo la acción']
+  actor_email varchar(254)
+  event varchar(200) [not null, note: 'Nombre del evento, p. ej. identity.user.role_removed']
+  resource varchar(100) [not null]
+  action varchar(100) [not null]
+  target_id varchar(128) [note: 'Sobre qué recayó (ensanchada de 36 a 128 caracteres)']
+  ip varchar(45)
+  request_id varchar(100)
+  payload json
+  occurred_at datetime [not null]
+  created_at datetime [not null, default: `CURRENT_TIMESTAMP`]
+  indexes {
+    (organization_id, occurred_at) [name: 'audit_logs_org_occurred']
+    (organization_id, occurred_at, id) [name: 'audit_logs_org_occurred_id']
+    (organization_id, event, occurred_at) [name: 'audit_logs_org_event_occurred']
+    (organization_id, user_id, occurred_at) [name: 'audit_logs_org_user_occurred']
+  }
+}
+
+Table audit.processed_events {
+  id varchar(36) [pk]
+  event_type varchar(100) [not null]
+  routing_key varchar(200) [not null]
+  payload text
+  status varchar(30) [not null, default: 'processed']
+  last_error text
+  processed_at datetime [not null, default: `CURRENT_TIMESTAMP`]
+}
+
+// ---------------------------------------------------------------------------
+//  assistant-service  (assistant_db) — asistente de IA del CRM
+//  (el chat de la landing NO guarda nada en base de datos)
+// ---------------------------------------------------------------------------
+Enum assistant.message_role {
+  user
+  assistant
+}
+Enum assistant.action_status {
+  proposed
+  executed
+  rejected
+  failed
+}
+
+Table assistant.conversations {
+  id char(36) [pk]
+  organization_id char(36) [not null]
+  user_id char(36) [not null, note: 'auth.users.id']
+  title varchar(200)
+  deleted_at datetime [note: 'Borrado lógico']
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (organization_id, user_id, updated_at)
+  }
+}
+
+Table assistant.messages {
+  id char(36) [pk]
+  seq bigint [not null, unique, increment, note: 'Orden real del historial (created_at tenía empates)']
+  conversation_id char(36) [not null]
+  role assistant.message_role [not null]
+  content json [not null, note: 'Bloques tipo Anthropic (text, tool_use, tool_result)']
+  input_tokens integer [not null, default: 0]
+  output_tokens integer [not null, default: 0]
+  cache_read_tokens integer [not null, default: 0]
+  created_at datetime [not null]
+  indexes {
+    (conversation_id, created_at)
+  }
+}
+
+Table assistant.pending_actions {
+  id char(36) [pk]
+  conversation_id char(36) [not null]
+  tool_use_id varchar(100) [not null, unique]
+  tool_name varchar(100) [not null]
+  input json [not null]
+  summary text [not null, note: 'Lo que la persona lee antes de confirmar']
+  status assistant.action_status [not null, default: 'proposed']
+  result json
+  decided_by_user_id char(36) [note: 'auth.users.id']
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    (conversation_id, status)
+  }
+}
+
+Table assistant.outbox_messages {
+  id char(36) [pk]
+  aggregate_type varchar(50) [not null]
+  aggregate_id char(36) [not null]
+  type varchar(100) [not null, note: 'assistant.action.proposed | executed | failed | rejected, assistant.conversation.deleted']
+  payload json [not null]
+  occurred_at datetime [not null]
+  processed_at datetime
+  indexes {
+    processed_at
+  }
+}
+
+Table assistant.usage_counters {
+  organization_id char(36) [pk]
+  window varchar(7) [pk, note: 'YYYY-MM']
+  input_tokens bigint [not null, default: 0]
+  output_tokens bigint [not null, default: 0]
+  requests integer [not null, default: 0]
+  updated_at datetime [not null]
+}
+
+// ---------------------------------------------------------------------------
+//  Grupos (cada uno = una base de datos)
+// ---------------------------------------------------------------------------
+TableGroup auth_db {
+  auth.users
+  auth.credentials
+  auth.oauth_accounts
+  auth.refresh_tokens
+  auth.password_reset_tokens
+  auth.organizations
+  auth.organization_memberships
+  auth.permissions
+  auth.roles
+  auth.role_permissions
+  auth.user_roles
+  auth.user_establishments
+  auth.pos_devices
+  auth.device_refresh_tokens
+  auth.trusted_ips
+  auth.outbox_messages
+  auth.processed_events
+}
+
+TableGroup organization_db {
+  organization.organizations
+  organization.establishments
+  organization.emission_points
+  organization.pos_themes
+  organization.organization_countries
+  organization.countries
+  organization.outbox_messages
+}
+
+TableGroup tax_db {
+  tax.countries
+  tax.tax_rates
+  tax.identification_types
+  tax.document_types
+  tax.outbox_messages
+}
+
+TableGroup customer_db {
+  customer.customers
+  customer.contacts
+  customer.addresses
+  customer.tags
+  customer.customer_tags
+  customer.identification_types
+  customer.outbox_messages
+  customer.processed_events
+}
+
+TableGroup product_db {
+  product.categories
+  product.units
+  product.products
+  product.product_taxes
+  product.product_images
+  product.product_establishments
+  product.outbox_messages
+}
+
+TableGroup inventory_db {
+  inventory.warehouses
+  inventory.stock_positions
+  inventory.stock_movements
+  inventory.stock_layers
+  inventory.reservations
+  inventory.products
+  inventory.organization_plugins
+  inventory.inventory_gaps
+  inventory.outbox_messages
+  inventory.processed_events
+}
+
+TableGroup billing_db {
+  billing.invoices
+  billing.invoice_lines
+  billing.line_taxes
+  billing.invoice_tax_totals
+  billing.sequences
+  billing.outbox_messages
+  billing.processed_events
+}
+
+TableGroup fiscal_db {
+  fiscal.fiscal_invoices
+  fiscal.certificates
+  fiscal.outbox_messages
+  fiscal.processed_events
+}
+
+TableGroup document_db {
+  document.file_references
+  document.outbox_messages
+}
+
+TableGroup plugin_catalog_db {
+  plugin_catalog.plugins
+  plugin_catalog.plugin_translations
+  plugin_catalog.plugin_dependencies
+  plugin_catalog.organization_plugins
+  plugin_catalog.plugin_custom_requests
+  plugin_catalog.business_profiles
+  plugin_catalog.business_profile_plugins
+  plugin_catalog.business_profile_translations
+  plugin_catalog.organization_business_profiles
+  plugin_catalog.outbox_messages
+}
+
+TableGroup notification_db {
+  notification.notifications
+  notification.notification_preferences
+  notification.processed_events
+}
+
+TableGroup audit_db {
+  audit.audit_logs
+  audit.processed_events
+}
+
+TableGroup assistant_db {
+  assistant.conversations
+  assistant.messages
+  assistant.pending_actions
+  assistant.usage_counters
+  assistant.outbox_messages
+}
+
+// ===========================================================================
+//  RELACIONES DENTRO DEL SERVICIO
+//  Las marcadas «FK» existen como FOREIGN KEY en MySQL; las demás existen en los
+//  modelos pero la base no las exige («sin FK en BD»).
+// ===========================================================================
+
+// --- auth ---
+Ref: auth.credentials.user_id - auth.users.id                              // FK (RESTRICT)
+Ref: auth.oauth_accounts.credential_id > auth.credentials.id               // FK (CASCADE)
+Ref: auth.refresh_tokens.credential_id > auth.credentials.id               // FK (CASCADE)
+Ref: auth.password_reset_tokens.user_id > auth.users.id                    // sin FK en BD
+Ref: auth.organization_memberships.user_id > auth.users.id                 // FK (CASCADE)
+Ref: auth.organization_memberships.organization_id > auth.organizations.id // sin FK en BD
+Ref: auth.roles.organization_id > auth.organizations.id                    // sin FK en BD
+Ref: auth.role_permissions.role_id > auth.roles.id                         // FK (CASCADE)
+Ref: auth.role_permissions.permission_id > auth.permissions.id             // FK (CASCADE)
+Ref: auth.user_roles.user_id > auth.users.id                               // FK (CASCADE)
+Ref: auth.user_roles.role_id > auth.roles.id                               // FK (CASCADE)
+Ref: auth.user_roles.organization_id > auth.organizations.id               // sin FK en BD
+Ref: auth.user_establishments.user_id > auth.users.id                      // FK (CASCADE)
+Ref: auth.pos_devices.organization_id > auth.organizations.id              // sin FK en BD
+Ref: auth.device_refresh_tokens.pos_device_id > auth.pos_devices.id        // sin FK en BD
+
+// --- organization ---
+Ref: organization.establishments.organization_id > organization.organizations.id      // FK (CASCADE)
+Ref: organization.emission_points.establishment_id > organization.establishments.id   // FK (CASCADE)
+Ref: organization.emission_points.organization_id > organization.organizations.id     // sin FK en BD
+Ref: organization.emission_points.pos_theme_id > organization.pos_themes.id           // FK (SET NULL)
+Ref: organization.pos_themes.organization_id > organization.organizations.id          // FK (CASCADE)
+Ref: organization.organization_countries.organization_id > organization.organizations.id // FK (CASCADE)
+Ref: organization.organization_countries.country_code > organization.countries.code   // sin FK en BD
+
+// --- tax ---
+Ref: tax.tax_rates.country_code > tax.countries.code                       // FK (CASCADE)
+Ref: tax.identification_types.country_code > tax.countries.code            // FK (CASCADE)
+Ref: tax.document_types.country_code > tax.countries.code                  // FK (CASCADE)
+
+// --- customer ---
+Ref: customer.contacts.customer_id > customer.customers.id                 // FK (CASCADE)
+Ref: customer.addresses.customer_id > customer.customers.id                // FK (CASCADE)
+Ref: customer.customer_tags.customer_id > customer.customers.id            // FK (CASCADE)
+Ref: customer.customer_tags.tag_id > customer.tags.id                      // FK (CASCADE)
+Ref: customer.customers.identification_type_id > customer.identification_types.id // sin FK en BD
+
+// --- product ---
+Ref: product.categories.parent_id > product.categories.id                  // FK (SET NULL)
+Ref: product.products.category_id > product.categories.id                  // FK (SET NULL)
+Ref: product.products.unit_id > product.units.id                           // FK (SET NULL)
+Ref: product.product_taxes.product_id > product.products.id                // FK (CASCADE)
+Ref: product.product_images.product_id > product.products.id               // FK (CASCADE)
+Ref: product.product_establishments.product_id > product.products.id       // FK (CASCADE)
+
+// --- inventory ---
+Ref: inventory.stock_layers.entry_movement_id > inventory.stock_movements.id // FK (RESTRICT)
+Ref: inventory.stock_positions.warehouse_id > inventory.warehouses.id      // sin FK en BD
+Ref: inventory.stock_positions.product_id > inventory.products.id          // sin FK en BD
+Ref: inventory.stock_movements.warehouse_id > inventory.warehouses.id      // sin FK en BD
+Ref: inventory.stock_movements.product_id > inventory.products.id          // sin FK en BD
+Ref: inventory.stock_layers.warehouse_id > inventory.warehouses.id         // sin FK en BD
+Ref: inventory.reservations.warehouse_id > inventory.warehouses.id         // sin FK en BD
+Ref: inventory.reservations.product_id > inventory.products.id             // sin FK en BD
+
+// --- billing (ninguna tiene FK en BD) ---
+Ref: billing.invoice_lines.invoice_id > billing.invoices.id                // sin FK en BD
+Ref: billing.line_taxes.invoice_line_id > billing.invoice_lines.id         // sin FK en BD
+Ref: billing.invoice_tax_totals.invoice_id > billing.invoices.id           // sin FK en BD
+Ref: billing.invoices.related_invoice_id > billing.invoices.id             // sin FK en BD (nota de crédito → factura)
+
+// --- document ---
+Ref: document.file_references.parent_id > document.file_references.id      // sin FK en BD
+
+// --- plugin_catalog ---
+Ref: plugin_catalog.plugins.based_on_plugin_id > plugin_catalog.plugins.id                // FK (SET NULL)
+Ref: plugin_catalog.plugin_translations.plugin_id > plugin_catalog.plugins.id             // FK (CASCADE)
+Ref: plugin_catalog.plugin_dependencies.plugin_id > plugin_catalog.plugins.id             // FK (CASCADE)
+Ref: plugin_catalog.plugin_dependencies.depends_on_plugin_id > plugin_catalog.plugins.id  // FK (CASCADE)
+Ref: plugin_catalog.organization_plugins.plugin_id > plugin_catalog.plugins.id            // FK (CASCADE)
+Ref: plugin_catalog.organization_plugins.required_by_plugin_id > plugin_catalog.plugins.id // FK (SET NULL)
+Ref: plugin_catalog.plugin_custom_requests.resulting_plugin_id > plugin_catalog.plugins.id // FK (SET NULL)
+Ref: plugin_catalog.business_profile_plugins.business_profile_id > plugin_catalog.business_profiles.id // FK (CASCADE)
+Ref: plugin_catalog.business_profile_plugins.plugin_id > plugin_catalog.plugins.id        // FK (CASCADE)
+Ref: plugin_catalog.business_profile_translations.business_profile_id > plugin_catalog.business_profiles.id // FK (CASCADE)
+Ref: plugin_catalog.organization_business_profiles.business_profile_id > plugin_catalog.business_profiles.id // FK (SET NULL)
+
+// --- assistant ---
+Ref: assistant.messages.conversation_id > assistant.conversations.id       // FK (CASCADE)
+Ref: assistant.pending_actions.conversation_id > assistant.conversations.id // FK (CASCADE)
+
+// ===========================================================================
+//  RELACIONES LÓGICAS ENTRE SERVICIOS
+//  NO son claves foráneas: son UUID que un servicio guarda de otro. Se mantienen
+//  por eventos y por llamadas HTTP. Comenta este bloque para un diagrama más limpio.
+// ===========================================================================
+
+// La empresa: todas las tablas con organization_id apuntan a organization.organizations
+Ref: auth.organizations.id - organization.organizations.id                 // auth guarda una copia mínima
+Ref: customer.customers.organization_id > organization.organizations.id
+Ref: customer.tags.organization_id > organization.organizations.id
+Ref: product.categories.organization_id > organization.organizations.id
+Ref: product.units.organization_id > organization.organizations.id
+Ref: product.products.organization_id > organization.organizations.id
+Ref: inventory.warehouses.organization_id > organization.organizations.id
+Ref: inventory.products.organization_id > organization.organizations.id
+Ref: billing.invoices.organization_id > organization.organizations.id
+Ref: billing.sequences.organization_id > organization.organizations.id
+Ref: fiscal.fiscal_invoices.organization_id > organization.organizations.id
+Ref: fiscal.certificates.organization_id > organization.organizations.id
+Ref: document.file_references.organization_id > organization.organizations.id
+Ref: plugin_catalog.organization_plugins.organization_id > organization.organizations.id
+Ref: plugin_catalog.plugin_custom_requests.organization_id > organization.organizations.id
+Ref: plugin_catalog.organization_business_profiles.organization_id > organization.organizations.id
+Ref: inventory.organization_plugins.organization_id > organization.organizations.id
+Ref: notification.notifications.organization_id > organization.organizations.id
+Ref: audit.audit_logs.organization_id > organization.organizations.id
+Ref: assistant.conversations.organization_id > organization.organizations.id
+Ref: assistant.usage_counters.organization_id > organization.organizations.id
+
+// Establecimientos y puntos de emisión
+Ref: auth.user_establishments.establishment_id > organization.establishments.id
+Ref: auth.pos_devices.emission_point_id > organization.emission_points.id
+Ref: organization.emission_points.paired_device_id - auth.pos_devices.id    // el POS emparejado
+Ref: product.product_establishments.establishment_id > organization.establishments.id
+Ref: inventory.warehouses.establishment_id > organization.establishments.id
+Ref: billing.invoices.establishment_id > organization.establishments.id
+Ref: billing.invoices.emission_point_id > organization.emission_points.id
+Ref: billing.sequences.establishment_id > organization.establishments.id
+Ref: billing.sequences.emission_point_id > organization.emission_points.id
+
+// Personas (auth.users)
+Ref: notification.notifications.user_id > auth.users.id
+Ref: notification.notification_preferences.user_id > auth.users.id
+Ref: audit.audit_logs.user_id > auth.users.id
+Ref: assistant.conversations.user_id > auth.users.id
+Ref: assistant.pending_actions.decided_by_user_id > auth.users.id
+Ref: inventory.stock_movements.created_by > auth.users.id
+Ref: plugin_catalog.organization_business_profiles.decided_by_user_id > auth.users.id
+
+// Catálogo fiscal (tax)
+Ref: billing.invoices.document_type_id > tax.document_types.id
+Ref: billing.sequences.document_type_id > tax.document_types.id
+Ref: billing.line_taxes.tax_rate_id > tax.tax_rates.id
+Ref: product.product_taxes.tax_rate_id > tax.tax_rates.id
+Ref: customer.identification_types.id - tax.identification_types.id        // copia del catálogo
+
+// Facturación
+Ref: billing.invoices.customer_id > customer.customers.id
+Ref: billing.invoice_lines.product_id > product.products.id
+Ref: fiscal.fiscal_invoices.billing_invoice_id - billing.invoices.id        // 1 comprobante SRI por factura/nota
+Ref: inventory.products.id - product.products.id                           // copia por eventos
+Ref: inventory.organization_plugins.plugin_code > plugin_catalog.plugins.code
+// Un movimiento de inventario nace de un documento (polimórfico: reference_type + reference_id, p. ej. una factura de billing).
+
+// Archivos (document-service / MinIO)
+Ref: auth.users.avatar_file_id > document.file_references.id
+Ref: customer.customers.image_file_id > document.file_references.id
+Ref: product.product_images.file_id > document.file_references.id
+Ref: fiscal.fiscal_invoices.signed_xml_file_id > document.file_references.id
+Ref: fiscal.fiscal_invoices.authorized_xml_file_id > document.file_references.id
+Ref: fiscal.certificates.p12_file_id > document.file_references.id
