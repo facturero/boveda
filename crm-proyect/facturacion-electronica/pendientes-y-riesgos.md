@@ -2,19 +2,19 @@
 
 [← Facturación electrónica](./README.md) · [Operación](./operacion.md) · [Historial de hallazgos](./historial-hallazgos.md)
 
-Estado al **2026-09-14**. Ordenado por lo que bloquea antes.
+Estado al **2026-09-16**. Ordenado por lo que bloquea antes.
 
-## 1. Trabajo terminado que nunca se subió
+## 1. ✅ Resuelto: el trabajo que estaba sin subir
 
-Lo más urgente, porque son cambios ya escritos y probados que están solo en el disco de la máquina de desarrollo. Los 144 tests de fiscal pasan con ellos.
+El 2026-09-14 había cambios escritos y probados solo en la máquina de desarrollo. **Se commitearon y subieron esa misma noche** (el CI despliega al hacer push; la ejecución del workflow no se ha comprobado desde la bóveda):
 
-| Repo | Sin commitear |
+| Repo | Commit |
 |---|---|
-| `backend/fiscal-ecuador` | RIDE completo: `domain/ride-pdf.ts`, `domain/ride-qr.ts`, `GET /fiscal-invoices/:id/ride`, `ride_available` en el DTO, 6 tests, `pdfkit` + `qrcode` |
-| `frontend` | Botón de RIDE, **pantalla de nota de crédito**, división de `InvoiceFormView` (691 → 260 líneas) en 6 componentes, `invoice-form.spec.ts` |
-| `backend/auth-service` | Migración que describe el permiso `invoice:authorize` |
+| `backend/fiscal-ecuador` | `feat(fiscal): RIDE en PDF (#18)` — `domain/ride-pdf.ts`, `domain/ride-qr.ts`, `GET /fiscal-invoices/:id/ride`, `ride_available` en el DTO, `pdfkit` + `qrcode` |
+| `frontend` | `feat(invoices): nota de credito en UI (#20), descarga del RIDE en PDF (#18), split de InvoiceFormView (#40)` |
+| `backend/auth-service` | `chore(auth): descripcion del permiso invoice:authorize (#33)` |
 
-**Consecuencia real:** billing y fiscal ya tienen la **nota de crédito desplegada**, pero nadie puede emitirla porque la pantalla no se ha subido. Lo mismo con el RIDE, que además necesita su backend. Es commit + push; el CI despliega solo.
+Con eso la nota de crédito ya se puede emitir desde la interfaz y el RIDE se descarga desde el detalle de la factura.
 
 ## 2. Nunca se ha conseguido una autorización real del SRI
 
@@ -49,7 +49,6 @@ Solo se emiten **factura (`01`)** y **nota de crédito (`04`)**. Cada uno de los
 - **`codigoAuxiliar`** no se emite; solo `codigoPrincipal` (el SKU).
 - **Huecos de secuencial**: se detectan y se avisa (`sequence_gap`, endpoint `GET /fiscal-invoices/sequence-gaps`), pero billing no los previene más allá de serializar la numeración con `FOR UPDATE`. Un hueco significa un comprobante emitido comercialmente cuyo evento no llegó a fiscal.
 - **Descarga pública de archivos**: los certificados y comprobantes fiscales ya están cerrados (404 para `fiscal_certificate`, `fiscal_invoice` y cualquier `application/x-pkcs12`), y los archivos se acotan por organización. Las **imágenes** siguen siendo públicas por id, porque la interfaz las pinta con `<img src>` sin token. Cerrarlo del todo obliga a cambiar cómo descarga el frontend.
-- **`InvoiceFormView`** quedó dividido, pero el refactor va en el lote sin subir.
 
 ## 5. Decisiones tomadas a propósito (no son deuda)
 

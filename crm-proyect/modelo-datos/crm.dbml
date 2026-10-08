@@ -1104,6 +1104,14 @@ Enum plugin_catalog.recommendation {
   essential
   suggested
 }
+Enum plugin_catalog.discount_kind {
+  percent
+  fixed
+}
+Enum plugin_catalog.fixed_applies_to {
+  plugin
+  total
+}
 Enum plugin_catalog.profile_decision {
   selected
   skipped
@@ -1212,6 +1220,60 @@ Table plugin_catalog.organization_business_profiles {
   decided_by_user_id char(36) [note: 'auth.users.id']
   decided_at datetime [not null]
   updated_at datetime [not null]
+}
+
+Table plugin_catalog.discounts {
+  id char(36) [pk]
+  code varchar(40) [not null, unique, note: 'Código que escribe el cliente (siempre en mayúsculas)']
+  name varchar(150) [not null]
+  kind plugin_catalog.discount_kind [not null]
+  value integer [not null, note: 'percent: puntos básicos (1500 = 15 %). fixed: centavos']
+  fixed_applies_to plugin_catalog.fixed_applies_to [not null, default: 'plugin', note: 'Solo en monto fijo: resta a CADA módulo (plugin) o una vez al total']
+  valid_from datetime
+  valid_until datetime
+  max_redemptions integer [note: 'Tope global de canjes; null = sin tope']
+  redemption_count integer [not null, default: 0]
+  per_organization_limit integer [not null, default: 1]
+  organization_id char(36) [note: 'Si tiene valor, el código es privado de esa organización']
+  duration_months integer [note: 'Cuánto dura el descuento desde el canje; null = mientras el módulo siga activo']
+  is_active boolean [not null, default: true]
+  created_by_user_id char(36) [note: 'auth.users.id de quien lo creó']
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  indexes {
+    organization_id
+  }
+}
+
+// La prueba gratis es de la ORGANIZACIÓN (no de cada módulo): arranca con el primer ingreso de su administrador.
+Table plugin_catalog.organization_trials {
+  organization_id char(36) [pk]
+  started_at datetime [not null]
+  ends_at datetime [not null, note: 'started_at + TRIAL_MONTHS (3 por defecto)']
+  started_by_user_id char(36) [note: 'auth.users.id del administrador cuyo ingreso la arrancó']
+  created_at datetime [not null]
+}
+
+Table plugin_catalog.discount_plugins {
+  discount_id char(36) [pk]
+  plugin_code varchar(100) [pk, note: 'Sin filas = el descuento aplica a todos los módulos']
+}
+
+Table plugin_catalog.discount_redemptions {
+  id char(36) [pk]
+  discount_id char(36) [not null]
+  organization_id char(36) [not null]
+  plugin_code varchar(100) [not null, note: 'El módulo que la persona eligió activar al canjear']
+  redeemed_by_user_id char(36) [note: 'auth.users.id']
+  list_cents bigint [not null, note: 'Precio de lista de lo que se activó']
+  discount_cents bigint [not null]
+  final_cents bigint [not null, note: 'Lo que se prometió pagar al mes: el cobro futuro debe usar esto']
+  redeemed_at datetime [not null]
+  expires_at datetime
+  indexes {
+    (discount_id, organization_id)
+    organization_id
+  }
 }
 
 Table plugin_catalog.outbox_messages {
@@ -1481,6 +1543,10 @@ TableGroup plugin_catalog_db {
   plugin_catalog.plugin_dependencies
   plugin_catalog.organization_plugins
   plugin_catalog.plugin_custom_requests
+  plugin_catalog.discounts
+  plugin_catalog.discount_plugins
+  plugin_catalog.discount_redemptions
+  plugin_catalog.organization_trials
   plugin_catalog.business_profiles
   plugin_catalog.business_profile_plugins
   plugin_catalog.business_profile_translations
@@ -1591,6 +1657,10 @@ Ref: plugin_catalog.business_profile_plugins.plugin_id > plugin_catalog.plugins.
 Ref: plugin_catalog.business_profile_translations.business_profile_id > plugin_catalog.business_profiles.id // FK (CASCADE)
 Ref: plugin_catalog.organization_business_profiles.business_profile_id > plugin_catalog.business_profiles.id // FK (SET NULL)
 
+Ref: plugin_catalog.discount_plugins.discount_id > plugin_catalog.discounts.id        // FK (CASCADE)
+Ref: plugin_catalog.discount_redemptions.discount_id > plugin_catalog.discounts.id    // FK (RESTRICT)
+Ref: plugin_catalog.discount_plugins.plugin_code > plugin_catalog.plugins.code        // sin FK en BD (por código de módulo)
+
 // --- assistant ---
 Ref: assistant.messages.conversation_id > assistant.conversations.id       // FK (CASCADE)
 Ref: assistant.pending_actions.conversation_id > assistant.conversations.id // FK (CASCADE)
@@ -1618,6 +1688,12 @@ Ref: document.file_references.organization_id > organization.organizations.id
 Ref: plugin_catalog.organization_plugins.organization_id > organization.organizations.id
 Ref: plugin_catalog.plugin_custom_requests.organization_id > organization.organizations.id
 Ref: plugin_catalog.organization_business_profiles.organization_id > organization.organizations.id
+Ref: plugin_catalog.discount_redemptions.organization_id > organization.organizations.id
+Ref: plugin_catalog.organization_trials.organization_id - organization.organizations.id
+Ref: plugin_catalog.organization_trials.started_by_user_id > auth.users.id
+Ref: plugin_catalog.discounts.organization_id > organization.organizations.id
+Ref: plugin_catalog.discount_redemptions.redeemed_by_user_id > auth.users.id
+Ref: plugin_catalog.discounts.created_by_user_id > auth.users.id
 Ref: inventory.organization_plugins.organization_id > organization.organizations.id
 Ref: notification.notifications.organization_id > organization.organizations.id
 Ref: audit.audit_logs.organization_id > organization.organizations.id

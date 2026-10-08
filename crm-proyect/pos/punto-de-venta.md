@@ -83,7 +83,7 @@ Es el clásico cuadre de caja: cuánto debería haber contra cuánto hay. **El C
 
 ### Ventas
 
-`sales` + `sale_items`: subtotal, impuesto, descuento, total, **método de pago** (`PaymentMethod`), estado (`SaleStatus`) y los campos de sincronización (`synced`, `syncedAt`, `syncError`, `remoteId`, el uuid que asignará billing-service).
+`sales` + `sale_items`: subtotal, impuesto, descuento, total, **método de pago** (`PaymentMethod`), estado (`SaleStatus`) y los campos de sincronización (`synced`, `syncedAt`, `syncError`, `remoteId`, el id de la factura que devuelve billing-service al subirla).
 
 | Ruta | Qué hace |
 |---|---|
@@ -115,14 +115,26 @@ Cuatro: `SetupView` (emparejamiento), `LoginView` (código + contraseña), `POSV
 
 Expuesto como `GET /sync/status` y `POST /sync/run`, para ver y forzar la sincronización desde la propia caja.
 
+### Subida de ventas al CRM (`push.ts`)
+
+> ⚠️ **Estado al 2026-09-16: escrito pero sin commitear**, en `pos` y en `billing-service`, y **nunca probado de punta a punta** contra el CRM. Falta ver una venta convertida en factura numerada, el stock descontado en inventario y la venta marcada `synced`.
+
+Cada venta `COMPLETED` con `synced: false` se sube a `POST /invoices/from-pos` de [billing-service](../servicios/billing-service.md), que la convierte en una **factura emitida**. Por orden, en lotes de 50:
+
+- **Sin emparejar no se sube nada**: sin `pos_config` no hay organización ni punto de emisión, así que la cola espera sin contarlo como error.
+- **El terminal es el `deviceId`** del equipo (`pos_identity`), no una variable de entorno. Con `TERMINAL_ID` por entorno, dos cajas con el mismo valor compartirían la clave de idempotencia y una podría darse por subida con la factura de la otra.
+- Se factura contra el **punto de emisión del emparejamiento** y al **cliente del CRM** de la venta (su `remoteId`) o, si no hay, a **CONSUMIDOR FINAL**.
+- **Artículos sin `remoteId`** (que no vinieron del catálogo del CRM) bloquean esa venta: se guarda el motivo en `syncError` y se queda en la cola, en vez de subir una factura con líneas inventadas.
+- Reintentar es seguro: billing devuelve la misma factura si ya la tenía.
+
 ## Desfases conocidos entre `rules.md` y el CRM de hoy
 
 `pos/rules.md` se escribió antes de que existieran varios servicios. Al retomarlo, revisar:
 
-| Dice `rules.md` | Realidad (2026-09-14) |
+| Dice `rules.md` | Realidad (2026-09-16) |
 |---|---|
-| "`push.ts` siempre va a fallar porque `billing-service` todavía no existe" | **billing-service existe y está desplegado**, con facturación electrónica encima. La subida de ventas se puede cablear de verdad |
-| "Sin control de stock porque product-service no maneja inventario" | Existe [inventory-service](../servicios/inventory-service.md), construido aunque no desplegado |
+| "`push.ts` siempre va a fallar porque `billing-service` todavía no existe" | billing-service existe y ya hay endpoint de ingesta (`POST /invoices/from-pos`), aún sin commitear. Ver [subida de ventas](#subida-de-ventas-al-crm-pushts) |
+| "Sin control de stock porque product-service no maneja inventario" | [inventory-service](../servicios/inventory-service.md) está **desplegado desde el 2026-09-15** y descuenta stock al emitirse la factura. La validación de stock en `sales.routes.ts` sigue deshabilitada: falta decidir qué hace la caja offline cuando no puede consultar el stock del CRM |
 | `POST /internal/service-accounts` | La ruta real en auth-service es **`/internal/device-accounts`** |
 | El usuario de servicio del POS es "Administrador" | Sigue siendo así, y sigue siendo una decisión temporal: falta un catálogo de permisos propio para terminales |
 
@@ -131,3 +143,14 @@ Expuesto como `GET /sync/status` y `POST /sync/run`, para ver y forzar la sincro
 - **organization-service**: puntos de emisión tipo POS, secreto TOTP, emparejar, desvincular, regenerar. Eventos `organization.billing_point.created` / `.paired` / `.unlinked`.
 - **auth-service**: usuarios de servicio por dispositivo (`pos_devices`, `/internal/device-accounts`), evento `identity.pos_device.provisioned`.
 - **api-gateway**: expone `/billing-points/pair` como público con rate limit.
+
+## Tematización (2026-09-28)
+
+Cada organización tiene una biblioteca de temas en **organization-service** (`pos_themes`); uno es el
+predeterminado y un punto de emisión POS puede tener otro asignado (`emission_points.pos_theme_id`). La
+resolución es override del punto → predeterminado de la organización → integrado ("Clásico"). El POS pide su
+tema resuelto (`GET /establishments/:id/billing-points/:pointId/theme`, con ETag), lo guarda en la tabla
+`pos_theme` y lo aplica como variables CSS. Cuando cambia, el CRM publica `organization.pos_theme.changed`, el
+gateway lo reenvía como `pos.theme.changed` a la sala de la organización y la caja vuelve a pedirlo. El tema
+es solo datos (nunca CSS/JS) y el POS lo sanea campo a campo. Los temas no son de pago. Editor en el CRM:
+Ajustes → Apariencia del POS. Detalle en `pos/CHANGELOG.md`.

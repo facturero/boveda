@@ -2,7 +2,7 @@
 
 [← Volver al índice](../README.md) · [tiempo real](./realtime-service.md) · [api-gateway](./api-gateway.md) · [plugin-catalog-service](./plugin-catalog-service.md)
 
-> **Estado: construido y desplegado (2026-09).** Documenta el servicio tal como está implementado.
+> **Estado: construido y desplegado (2026-09).** Documenta el servicio tal como está implementado; rutas y eventos verificados el 2026-09-16. Puerto 3011.
 
 ## Responsabilidad
 
@@ -54,17 +54,20 @@ Más `processed_events` para la idempotencia del consumidor.
 | Método | Ruta | Qué hace |
 |--------|------|----------|
 | GET | `/notifications` | bandeja del usuario (no leídas primero) |
-| PATCH | `/notifications/:id/read` | marcar una como leída |
+| POST | `/notifications/:id/read` | marcar una como leída |
 | POST | `/notifications/read-all` | marcar todas |
 | GET | `/notifications/providers` | catálogo filtrado por los plugins de la organización |
 | GET/PUT | `/notifications/me/preferences` | preferencias por proveedor y canal |
 
 ## Eventos que consume
 
+Verificado 2026-09-16. Las colas se bindean con los eventos de `src/template-config.json`, así que **añadir un aviso es añadir una entrada allí y otra en `provider-config.json`**.
+
 - `identity.user.invited` — invitación (solo correo)
 - `identity.user.enabled` / `identity.user.disabled` — alta y baja de acceso
 - `identity.user.password_reset_requested` — enlace de reseteo (solo correo)
 - `billing.invoice.issued` — comprobante emitido
+- `billing.invoice.voided` — comprobante anulado
 - **`fiscal.ec.invoice.attention_required`** — un comprobante electrónico necesita a una persona: rechazado por el SRI o atascado. Ver [facturación electrónica](../facturacion-electronica/flujo-end-to-end.md)
 
 ## Cómo llega en vivo a la pantalla

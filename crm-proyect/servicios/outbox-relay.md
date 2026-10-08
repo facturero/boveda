@@ -47,17 +47,31 @@ rabbitmqctl list_queues name messages | grep '\.retry$'
 rabbitmqctl delete_queue <servicio>.<cola>.retry
 ```
 
-## ⚠️ La publicación inmediata NO está cableada (verificado 2026-09-14)
+## Publicación inmediata tras el commit (cableada el 2026-09-15)
 
-El argumento principal de la librería —publicar **en cuanto el commit tiene éxito**, en vez de esperar al temporizador— **no lo usa ningún servicio**.
+La API es `attachToTransaction(tx)`, que engancha `tx.afterCommit(() => this.notify())`, o una llamada directa a `relay.notify()`.
 
-La API es `attachToTransaction(tx)` (que engancha `tx.afterCommit(() => this.notify())`) o una llamada directa a `relay.notify()`. Buscando en los once servicios que publican: **cero llamadas a `attachToTransaction`, cero a `notify()`**. Todos hacen `await relay.start()` y ahí acaba; varios ni siquiera conservan la referencia al relay, así que no podrían llamarlo.
+**Estado actual (verificado 2026-09-16):** los **10 servicios que publican** (auth, organization, customer, product, tax, billing, document, fiscal-ecuador, plugin-catalog, inventory) la usan, desde el commit `fix(outbox): publicar eventos justo tras el commit` del 2026-09-15. El enganche se hace **una sola vez, en la unidad de trabajo**, no en cada caso de uso:
 
-**Consecuencia:** todos los eventos del sistema salen por el **safety net**, el `setInterval` de `safetyNetIntervalMs` (30 s por defecto). Es decir, entre 0 y 30 s de retraso, al azar, en cada evento de dominio — exactamente el problema que la librería venía a resolver.
+```ts
+// main.ts
+let relay: OutboxRelay | undefined;
+const uow = new SequelizeUnitOfWork((tx) => relay?.attachToTransaction(tx));
+// ...más abajo, si hay RABBITMQ_URL:
+relay = new OutboxRelay({ ... });
 
-Se midió en vivo con el gate de plugins del gateway: activar un plugin tardó **14,4 s** en reflejarse, y una suite de pruebas que sondeaba 20 s falló dos veces (hallazgo #23 del `TEST-PLAN.md`, que lo atribuyó solo a plugin-catalog-service; en realidad les pasa a todos).
+// SequelizeUnitOfWork.execute
+return sequelize.transaction(async (tx) => {
+  this.onCommit?.(tx);
+  return work(buildRepositories(tx));
+});
+```
 
-**El arreglo** es una línea por caso de uso: enganchar la transacción al relay, o llamar a `relay.notify()` después del COMMIT que escribe en el outbox.
+El `relay` se declara con `let` antes de crear la unidad de trabajo porque se construye después; el `?.` cubre el arranque sin RabbitMQ.
+
+El `setInterval` de `safetyNetIntervalMs` (30 s por defecto) **sigue existiendo**, pero ya solo como red de seguridad: recoge lo que quede en `outbox_messages` si el broker no estaba disponible en el momento del commit.
+
+**Historia, por si vuelve a aparecer:** hasta el 2026-09-14 ningún servicio llamaba a `attachToTransaction` ni a `notify()`, así que todos los eventos salían por el temporizador, con entre 0 y 30 s de retraso. Se midió en vivo con el gate de plugins del gateway: activar un plugin tardaba **14,4 s** en reflejarse, y una suite que sondeaba 20 s falló dos veces (hallazgo #23 del `TEST-PLAN.md`, atribuido solo a plugin-catalog-service; en realidad les pasaba a todos). **Un servicio nuevo que se copie sin este enganche vuelve a tener ese retraso** sin que nada falle.
 
 ## Handler comodín
 

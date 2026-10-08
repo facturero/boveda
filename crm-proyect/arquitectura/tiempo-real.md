@@ -90,6 +90,8 @@ Se separan responsabilidades en namespaces de Socket.IO:
 
 ## Escalado horizontal con Redis
 
+> ❌ **No construido (verificado 2026-09-16).** No hay Redis en el sistema ni adaptador de Socket.IO. El hub vive en el api-gateway, que corre en **una sola réplica**; escalarlo a más exige añadir primero este adaptador (y mover a un almacén compartido las cachés y el rate limit, que hoy están en memoria). Lo que sigue es el diseño para ese momento.
+
 Socket.IO en varias instancias necesita compartir las rooms. Se usa el **Redis adapter**:
 
 ```mermaid

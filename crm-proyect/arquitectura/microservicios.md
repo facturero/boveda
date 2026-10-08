@@ -10,7 +10,7 @@ Cada servicio se define por un **límite de dominio (bounded context)**: agrupa 
 
 ## Tabla de servicios
 
-> **Inventario real al 2026-09-14** (verificado contra el código y contra los despliegues). El diseño original hablaba de un `realtime-service` que nunca existió y daba por futuros varios servicios que ya están construidos.
+> **Inventario real al 2026-09-16** (verificado contra el código y contra los despliegues). El diseño original hablaba de un `realtime-service` que nunca existió y daba por futuros varios servicios que ya están construidos.
 
 | Servicio | Dominio (bounded context) | Base de datos | Estado |
 |---|---|---|---|
@@ -26,7 +26,7 @@ Cada servicio se define por un **límite de dominio (bounded context)**: agrupa 
 | [plugin-catalog-service](../servicios/plugin-catalog-service.md) | Catálogo de módulos, activación, perfiles de negocio | `plugin_catalog_db` | desplegado |
 | [audit-log-service](../servicios/audit-log-service.md) | Bitácora central (consume `#`) | `audit_db` | desplegado |
 | [asistente de IA](../servicios/asistente-ia.md) | Agente que ejecuta dentro del CRM | `assistant_db` | desplegado |
-| [inventory-service](../servicios/inventory-service.md) | Bodegas, stock, kardex, costeo FIFO/promedio | `inventory_db` | **construido, sin desplegar** |
+| [inventory-service](../servicios/inventory-service.md) | Bodegas, stock, kardex, costeo FIFO/promedio | `inventory_db` | desplegado (2026-09-15) |
 | [api-gateway](../servicios/api-gateway.md) | Borde: routing, JWT, plugins, **WebSocket `/ws`** | — | desplegado |
 
 Además, fuera del clúster:

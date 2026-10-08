@@ -114,48 +114,57 @@ sequenceDiagram
 
 organization-service **no emite `organization.org.created`** (auth ya creó la org). El establecimiento matriz (`001`) y el punto (`001`) se crean en la primera completación del perfil, para poder facturar de inmediato.
 
-## API REST (resumen)
+## API REST
+
+Verificado contra `src/interface/http/routes.ts` el 2026-09-16.
 
 | Método | Ruta | Permiso |
 |--------|------|---------|
 | GET | `/organizations/me` | `organization:read` |
-| PUT | `/organizations/me` | `organization:update` (completar/actualizar perfil fiscal) |
-| PATCH | `/organizations/me` | `organization:update` (nombre/settings) |
+| PUT | `/organizations/me` | `organization:admin` (completar/actualizar perfil fiscal) |
+| PATCH | `/organizations/me` | `organization:admin` (nombre/settings) |
+| GET | `/organizations/me/countries` | `organization:read` |
+| POST | `/organizations/me/countries` | `organization:admin` |
 | GET | `/establishments` | `establishment:read` |
 | POST | `/establishments` | `establishment:create` |
 | PATCH | `/establishments/:id` | `establishment:update` |
 | GET | `/establishments/:id/billing-points` | `establishment:read` |
 | POST | `/establishments/:id/billing-points` | `establishment:create` |
-| GET | `/organizations/me/countries` | `organization:read` |
-| POST | `/organizations/me/countries` | `organization:update` |
+| GET | `/establishments/:id/billing-points/:pointId/pairing-code` | `establishment:read` |
+| POST | `/establishments/:id/billing-points/:pointId/unlink` | `establishment:update` |
+| POST | `/billing-points/pair` | **público** (el código TOTP es la autenticación) |
+
+El permiso de escritura sobre la organización es **`organization:admin`**, no `organization:update`.
 
 ## Eventos
 
-**Publica:**
+**Publica** (verificado 2026-09-16):
 
-| Evento | Cuándo | Consumido por |
+| Evento | Cuándo | Lo consume |
 |--------|--------|---------------|
-| `organization.org.updated` | Perfil fiscal completado/actualizado | [auth](./auth-service.md) (country_code del token), [billing](./billing-service.md) (snapshot emisor) |
-| `organization.establishment.created` | Nuevo establecimiento | [billing](./billing-service.md) |
-| `organization.billing_point.created` | Nuevo punto de facturación | [billing](./billing-service.md) (inicia secuencial) |
-| `organization.billing_point.disabled` | Baja de punto | [billing](./billing-service.md) |
+| `organization.org.updated` | Perfil fiscal completado/actualizado (`PUT` o `PATCH`) | [auth](./auth-service.md) (country_code del token), [customer](./customer-service.md), [inventory](./inventory-service.md) |
+| `organization.establishment.created` | Nuevo establecimiento (también el `001` del alta) | [inventory](./inventory-service.md) (crea la bodega) |
+| `organization.establishment.updated` | Edición de un establecimiento | audit |
+| `organization.billing_point.created` | Nuevo punto de emisión (también el `001` del alta) | gateway (hub) |
+| `organization.billing_point.paired` / `.unlinked` | Emparejar o desvincular un POS | gateway (hub → `pos.unlink` a `device:<id>`) |
+| `organization.country.added` | `POST /organizations/me/countries` | audit |
 
-**Consume:**
+No existe `organization.billing_point.disabled`.
 
-| Evento | Origen | Acción |
-|--------|--------|--------|
-| `tax.country.enabled` | [tax](./tax-service.md) | Validar que el país solicitado existe en el catálogo |
+⚠️ **billing-service no consume ninguno de estos eventos** (el diagrama de arriba es el diseño): pide establecimiento, punto de emisión y perfil del emisor por HTTP al emitir, y el secuencial se crea en billing la primera vez que se usa el punto.
+
+**Consume:** nada.
 
 ## Dependencias
 
-- **tax-service**: read-model de países habilitados (vía `tax.country.enabled`) para validar el `country_code`.
-- **auth-service**: crea la organización (id) + Administrador en el registro; **consume** `organization.org.updated` para el `country_code` del token.
-- **billing-service**: consume `establishment.created` / `billing_point.created`.
+- **Catálogo de países:** los países habilitados están en una tabla **local** `countries`, sembrada por la migración `20260703150001-seed-countries.js`. **No se sincroniza con tax-service** (no hay consumidor de `tax.country.enabled`): habilitar un país nuevo en tax-service no lo habilita aquí.
+- **auth-service**: crea la organización (id) + Administrador en el registro; **consume** `organization.org.updated` para el `country_code` del token. organization-service lo llama por HTTP (`POST /internal/device-accounts`) al emparejar un POS.
+- **billing-service** y **fiscal-ecuador**: le piden por HTTP el perfil del emisor, establecimientos y puntos de emisión.
 
 ## Validaciones (ver [validación](../arquitectura/validacion.md))
 
 - **Borde (Zod)**: `country_code` ISO válido, `code` de establecimiento/punto con formato (3 dígitos), `tax_id` con formato del país.
-- **Dominio**: el `country_code` debe existir y estar habilitado en [tax-service](./tax-service.md); el RUC/RFC/NIT matriz se valida con la estrategia del país; los `code` de establecimiento/punto son únicos dentro de su ámbito; no desactivar el establecimiento matriz.
+- **Dominio**: el `country_code` debe estar habilitado en la tabla local `countries` (no se consulta a [tax-service](./tax-service.md)); el RUC/RFC/NIT matriz se valida con la estrategia del país; los `code` de establecimiento/punto son únicos dentro de su ámbito; no desactivar el establecimiento matriz.
 
 ## Lo que se añadió después del diseño (verificado 2026-09-14)
 
@@ -167,7 +176,7 @@ Un punto de emisión puede ser un **terminal POS**. Al crearlo se genera un secr
 |---|---|
 | `POST /billing-points/pair` | **público**, sin JWT: el código TOTP *es* la autenticación. Rate limit de 5/min en el gateway |
 | `GET /establishments/:id/billing-points` | listado |
-| `POST /establishments/:id/billing-points/:pointId/pairing-code` | ver el código |
+| `GET /establishments/:id/billing-points/:pointId/pairing-code` | ver el código |
 | `POST /establishments/:id/billing-points/:pointId/unlink` | desvincular y regenerar el secreto |
 
 Reglas del dominio: el emparejamiento es **de un solo uso** (`EmissionPoint.markPaired` / `unlinkAndRegenerate`), y `pair` valida el código contra **todos** los puntos POS sin emparejar de **cualquier** organización, porque todavía no sabe a cuál pertenece el equipo. Si acierta, llama a auth-service (`POST /internal/device-accounts`, secreto interno) para crear el usuario de servicio del equipo.

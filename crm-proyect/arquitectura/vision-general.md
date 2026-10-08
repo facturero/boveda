@@ -82,9 +82,9 @@ graph TB
 |------|-------------|-----------------|
 | Presentación | SPA Vue 3 | UI, UX, validación inmediata, estado local |
 | Borde | API Gateway (REST + Socket.IO `/ws`) | Autenticación de borde, routing, plugins por ruta, propagación de contexto, push en tiempo real |
-| Aplicación | 6 microservicios | Lógica de negocio por dominio |
+| Aplicación | 13 microservicios (ver [microservicios](./microservicios.md)) | Lógica de negocio por dominio |
 | Integración | RabbitMQ | Eventos de dominio, desacople temporal |
-| Datos | MySQL ×N, Redis | Persistencia aislada por servicio + cache |
+| Datos | MySQL ×N (una base por servicio), MinIO | Persistencia aislada por servicio y archivos. **Sin Redis**: las cachés (permisos, plugins, rate limit) viven en la memoria del gateway |
 
 ## Flujo representativo: emitir una factura
 

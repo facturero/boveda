@@ -226,50 +226,77 @@ sequenceDiagram
 
 Si el usuario pertenece a varias organizaciones (ver [multiorganizacional](../arquitectura/multiorganizacional.md#usuarios-en-varias-organizaciones)), `POST /auth/switch-organization` reemite el token con el nuevo `org_id` y los permisos de esa organización.
 
-## API REST (resumen)
+## API REST
 
-**Autenticación:**
+Verificado contra `src/interface/http/routes.ts` el 2026-09-16.
 
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| POST | `/auth/register` | Alta de credencial + usuario |
-| POST | `/auth/login` | Login con email/contraseña |
-| POST | `/auth/mfa/verify` | Verificar código TOTP |
-| POST | `/auth/google` | Sign-In con ID Token de Google |
-| POST | `/auth/refresh` | Rotar access token |
-| POST | `/auth/logout` | Revocar refresh token |
-| POST | `/auth/switch-organization` | Cambiar org activa del token |
-| POST | `/auth/password/forgot` · `/reset` | Recuperación |
-| GET | `/auth/me` | Perfil + permisos del token |
+**Autenticación** (el gateway las publica bajo `/auth/*`):
 
-**Autorización / administración (RBAC):**
+| Método | Ruta | Acceso | Descripción |
+|--------|------|--------|-------------|
+| POST | `/auth/register` | público | Alta de credencial + usuario + organización mínima |
+| POST | `/auth/login` | público | Login con email/contraseña |
+| POST | `/auth/google` | público | Sign-In con ID Token de Google |
+| POST | `/auth/refresh` | público | Rotar access token |
+| POST | `/auth/logout` | público | Revocar refresh token |
+| POST | `/auth/accept-invite` | público | El invitado fija su contraseña con el token del correo |
+| POST | `/auth/password-reset` | público | Fijar contraseña nueva con el token de reseteo |
+| GET | `/auth/me` | JWT | Perfil + permisos |
+| POST | `/auth/switch-organization` | JWT | Cambiar org activa del token |
+| POST | `/auth/complete-profile` | JWT | Datos personales y foto tras el registro |
+
+⚠️ **No existen** `/auth/mfa/verify` (el 2FA no está construido) ni un "olvidé mi contraseña" de autoservicio: **el reseteo lo dispara un administrador** con `POST /users/:id/password-reset`, que manda el correo con el enlace, y el usuario lo completa en `POST /auth/password-reset`.
+
+**Administración (RBAC):**
 
 | Método | Ruta | Permiso |
 |--------|------|---------|
-| GET | `/users` | `user:read` |
+| GET | `/users?establishmentId=` | `user:read` |
 | POST | `/users/invite` | `user:invite` |
-| PATCH | `/users/:id` | `user:update` |
-| POST | `/users/:id/disable` | `user:update` |
+| POST | `/users/:id/disable` | `user:update` — **alterna**: deshabilita a un usuario activo y rehabilita a uno deshabilitado. No deja quitar al último administrador |
 | POST | `/users/:id/roles` | `user:assign_role` |
+| POST | `/users/:id/establishments` | `user:update` |
+| POST | `/users/:id/password-reset` | `password:change` — no sobre uno mismo ni sobre el dueño de la organización |
 | GET | `/roles` | `user:read` |
 | POST | `/roles` | `user:assign_role` |
 | PATCH | `/roles/:id/permissions` | `user:assign_role` |
-| GET | `/permissions` | (catálogo) |
+| GET | `/permissions` | JWT (catálogo) |
+| GET · POST · PATCH · DELETE | `/trusted-ips`, `/trusted-ips/:id` | `user:read` / `user:update` |
+| GET | `/trusted-ips/enabled` | público (lo consulta el gateway) |
+
+No hay `PATCH /users/:id`.
+
+**Internas** (con `X-Internal-Secret`, el gateway no las expone): `POST /internal/device-accounts`, `GET /internal/users/:userId/access-context`.
 
 Todas las rutas de administración operan dentro del `org_id` del contexto (ver [multiorganizacional](../arquitectura/multiorganizacional.md)).
 
+> ✅ **Corregido el 2026-09-16 (commit `6021c4f`): el hash de la contraseña ya no llega a personas.** Hasta entonces, cualquiera con `password:view` recibía en `GET /users` el `passwordHash` (Argon2) de cada usuario, lo que permitía atacar las contraseñas fuera de línea sin límite de intentos.
+>
+> Ahora `ListUsersUseCase` solo incluye `passwordHash` si **quien llama es un terminal POS emparejado con esa misma organización**: el `sub` de su token es el id de una fila de `pos_devices` cuyo `organization_id` coincide. El POS lo necesita para validar el login del cajero **sin internet**. Una persona, tenga los permisos que tenga, recibe `passwordHash: null` y solo `hasPassword`, que es lo único que usa el frontend. Tests en `rbac-e2e.test.ts`: persona con `password:view` → `null`; POS de la organización → hash; POS de otra organización → `null`.
+>
+> Riesgo que queda: el POS guarda los hashes en su base local, así que un equipo robado los expone.
+
 ## Eventos
 
-**Publica** (namespace `identity.*` por contexto de dominio):
+**Publica** (verificado 2026-09-16; namespace `identity.*` salvo uno):
 
-| Evento | Cuándo | Consumido por |
+| Evento | Cuándo | Lo consume |
 |--------|--------|---------------|
-| `identity.user.created` | Nuevo usuario/invitación | [realtime](./realtime-service.md) |
-| `identity.user.role_assigned` | Asignación/cambio de rol | [gateway](./api-gateway.md) (refresca caché de `pv`) |
-| `identity.role.updated` | Cambio de permisos de un rol | [gateway](./api-gateway.md) (caché de `pv`) |
-| `identity.user.disabled` | Baja de usuario | [gateway](./api-gateway.md), [realtime](./realtime-service.md) |
-| `auth.user.logged_in` | Login exitoso | audit, [realtime](./realtime-service.md) |
-| `auth.password.changed` | Cambio de clave | audit |
+| `identity.user.created` | Registro, primer login con Google o invitación | gateway (hub), audit |
+| `identity.user.invited` | Invitación | [notification](./notification-service.md) (correo) |
+| `identity.user.accepted_invite` | El invitado fija su contraseña | audit |
+| `identity.user.profile_completed` | `complete-profile` | audit |
+| `identity.user.role_assigned` | Asignación de rol (también al invitar) | gateway (caché de `pv`), audit |
+| `identity.user.disabled` / `identity.user.enabled` | `POST /users/:id/disable` | gateway, [notification](./notification-service.md) |
+| `identity.user.establishments_updated` | Cambio de establecimientos del usuario | gateway, audit |
+| `identity.user.password_reset_requested` | Un admin pide el reseteo | [notification](./notification-service.md) (correo con enlace) |
+| `identity.user.password_reset_completed` | El usuario fija la contraseña | audit |
+| `identity.role.created` | Nuevo rol | audit |
+| `identity.role.updated` | Cambio de permisos de un rol | gateway (caché de `pv`), audit |
+| `identity.pos_device.provisioned` | Alta de usuario de servicio de un POS | audit |
+| `auth.credential.linked_google` | Se vincula una cuenta de Google a una credencial existente | audit |
+
+El gateway se suscribe a `identity.#` entero; [audit-log-service](./audit-log-service.md) recibe todos. **No existen** `auth.user.logged_in` ni `auth.password.changed`: los logins no generan evento.
 
 **Consume:**
 
@@ -283,7 +310,7 @@ Todas las rutas de administración operan dentro del `org_id` del contexto (ver 
 
 - **organization-service**: vía eventos — auth consume `organization.org.updated` para refrescar el `country_code` del read-model. (El seeding de roles + admin del fundador ocurre en el **registro**, no por evento.)
 - **document-service**: el usuario tiene **foto de perfil** (`avatar_file_id`, opcional) que **referencia por ID** un archivo de document-service. auth solo guarda el `avatar_file_id`; el binario y sus variantes viven en document-service. Se fija en `complete-profile` y se devuelve en `GET /auth/me`. No hay dependencia síncrona: si el archivo no existe, el front simplemente muestra el avatar por defecto.
-- **Redis**: caché de tokens revocados / rate limiting de login (opcional, para multi-instancia).
+- **Redis**: no se usa. El diseño lo contemplaba para tokens revocados y rate limit de login; la revocación va por `pv` y el rate limit lo hace el gateway en memoria.
 - **RabbitMQ**: publicación (Outbox) y consumo.
 - ~~identity-service~~: **eliminado** — sus responsabilidades viven aquí.
 
@@ -327,7 +354,7 @@ La IP la resuelve el gateway y la manda en `X-Client-Ip`, descartando lo que man
 
 ### 3. Acceso por establecimiento
 
-`user_establishments` y `PUT /users/:id/establishments`: a un usuario se le puede limitar a ciertos establecimientos de la organización, no solo por rol. Evento `identity.user.establishments_updated`.
+`user_establishments` y `POST /users/:id/establishments`: a un usuario se le puede limitar a ciertos establecimientos de la organización, no solo por rol. Evento `identity.user.establishments_updated`.
 
 ### 4. Google Sign-In y reseteo de contraseña
 
@@ -352,6 +379,7 @@ La migración `20260802140000-add-username-to-users.js` hizo el backfill de los 
 - `invoice:authorize` — reenviar un comprobante al SRI. Existía en el catálogo sin que nada lo exigiera; desde 2026-09 lo usa `POST /fiscal-invoices/:id/retry`.
 - `fiscal:manage` — además, subir y revocar el certificado de firma de la empresa.
 - `fiscal:read`, `audit:read`.
+- `password:change` — pedir el reseteo de contraseña de otro empleado. `password:view` — en la interfaz, ver si un empleado tiene contraseña (`hasPassword`). **No da acceso al hash**, que solo recibe un terminal POS (ver [API REST](#api-rest)).
 
 ## Notas de diseño
 

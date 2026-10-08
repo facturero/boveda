@@ -8,13 +8,13 @@
 
 Billing emite el comprobante comercial y publica un evento; `fiscal-ecuador` lo convierte en XML del SRI, lo firma con el certificado `.p12` de la organización, lo envía a los web services del SRI, espera la autorización y deja disponible el XML autorizado y el RIDE en PDF. Si algo necesita a una persona, suena la campana del CRM.
 
-## Estado hoy (2026-09-14)
+## Estado hoy (2026-09-16)
 
 | Pieza | Estado |
 |---|---|
 | Factura (`01`) end-to-end: XML → firma → envío → autorización | ✅ construido y desplegado |
-| Nota de crédito (`04`) | ✅ backend desplegado · ⚠️ **la pantalla está sin subir** |
-| RIDE (PDF tributario con QR) | ⚠️ **terminado en local, sin commitear** |
+| Nota de crédito (`04`) | ✅ backend y pantalla subidos (pantalla: 2026-09-14) |
+| RIDE (PDF tributario con QR) | ✅ subido el 2026-09-14 (`GET /fiscal-invoices/:id/ride` + botón de descarga) |
 | XML validado contra los XSD oficiales del SRI | ✅ en CI (`xmllint-wasm`) |
 | Firma XAdES-BES verificada | ✅ con `xml-crypto` (verificador independiente) · ❌ nunca contra el validador oficial |
 | Autorización REAL del SRI (un comprobante AUTORIZADO) | ❌ **nunca se ha conseguido**: falta RUC registrado y certificado acreditado |
@@ -41,7 +41,7 @@ Billing emite el comprobante comercial y publica un evento; `fiscal-ecuador` lo 
 | [organization-service](../servicios/organization-service.md) | Perfil del emisor: RUC, dirección matriz, RIMPE, contribuyente especial, establecimientos |
 | [customer-service](../servicios/customer-service.md) | Datos del comprador y **el código** de su tipo de identificación |
 | [document-service](../servicios/document-service.md) | Guarda el `.p12`, el XML firmado y el XML autorizado |
-| [notification-service](../servicios/audit-log-service.md) + [api-gateway](../servicios/api-gateway.md) | La campana: avisa cuando un comprobante necesita a una persona |
+| [notification-service](../servicios/notification-service.md) + [api-gateway](../servicios/api-gateway.md) | La campana: avisa cuando un comprobante necesita a una persona |
 
 ## Principio que lo ordena todo
 

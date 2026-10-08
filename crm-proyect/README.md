@@ -66,7 +66,7 @@ Una plataforma tipo **CRM + facturación electrónica**, construida con **micros
 
 ### Modelo de datos
 
-- [Esquema real del CRM (`crm.dbml`)](./modelo-datos/crm.dbml) — las 87 tablas de los 13 servicios, sacadas de las migraciones; pégalo en <https://dbdiagram.io>. `node modelo-datos/verificar-dbml.mjs` lo compara con las migraciones y avisa si se desfasó
+- [Esquema real del CRM (`crm.dbml`)](./modelo-datos/crm.dbml) — las 91 tablas de los 13 servicios, sacadas de las migraciones; pégalo en <https://dbdiagram.io>. `node modelo-datos/verificar-dbml.mjs` lo compara con las migraciones y avisa si se desfasó
 - [Esquema del POS Kiosko (`pos-kiosko.dbml`)](./modelo-datos/pos-kiosko.dbml) — la base SQLite local de cada caja (13 tablas)
 - [Relaciones globales](./modelo-datos/relaciones-globales.md) — cómo se asocian las entidades entre servicios (IDs de referencia, diagrama ER global)
 - [Esquema DBML antiguo](./modelo-datos/esquema-dbml.md) — versión de diseño, desfasada; vale `crm.dbml`

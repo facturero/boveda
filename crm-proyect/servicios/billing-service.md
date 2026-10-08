@@ -6,7 +6,7 @@
 > billing-service es **puro flujo comercial**, sin conexión a autoridades fiscales. Emite facturas con secuencial atómico, cálculos exactos con Dinero.js, snapshots inmutables y ciclo de vida `draft → issued → voided`.
 > Las autoridades fiscales (SRI, DIAN, SUNAT, SAT) viven en **servicios separados por país** (`fiscal-ecuador`, `fiscal-peru`…) que **consumen los eventos de billing** y publican eventos fiscales de vuelta. Ver [estrategia multipaís](../arquitectura/estrategia-multipais.md) para el detalle.
 >
-> **Estado actual (2026-09-14).** Construido y desplegado: ciclo `draft → issued → voided`, Dinero.js, secuencial atómico, snapshots y **notas de crédito** (`POST /invoices/:id/credit-note`, tipo SRI `04`).
+> **Estado actual (2026-09-16).** Construido y desplegado: ciclo `draft → issued → voided`, Dinero.js, secuencial atómico, snapshots y **notas de crédito** (`POST /invoices/:id/credit-note`, tipo SRI `04`).
 > La Fase 2 fiscal **ya existe**: [fiscal-ecuador](./fiscal-ecuador.md) consume los eventos de billing y se encarga del SRI. Billing sigue sin conocerlo. Ver [facturación electrónica](../facturacion-electronica/README.md).
 >
 > ⚠️ Cambio de 2026-09-13: las líneas guardan **siempre importes sin impuestos**. Si el producto tiene el precio con IVA incluido, se le quita el IVA primero y el impuesto se calcula una sola vez sobre la base; antes se cobraba dos veces.
@@ -95,7 +95,9 @@ erDiagram
     }
 ```
 
-Read-models locales (alimentados por eventos): `establishments`, `emission_points`, `customers`, `products`, `tax_rates`, `document_types`. Además Outbox + `processed_events`.
+**Tablas reales (2026-09-16):** `invoices`, `invoice_lines`, `line_taxes`, `invoice_tax_totals`, `sequences`, `outbox_messages`, `processed_events`. Una nota de crédito es una fila más de `invoices` con `related_invoice_id` y `credit_note_reason`.
+
+⚠️ **No hay read-models locales.** El diseño preveía copias de establecimientos, clientes, productos, tasas y tipos de comprobante alimentadas por eventos; lo construido las **consulta por HTTP** en el momento de usarlas, con un adaptador por catálogo en `infrastructure/http/`: `organization-catalog`, `customer-catalog`, `product-catalog`, `tax-rate-catalog`, `document-type-catalog` (y `document-storage` para subir archivos). Esas llamadas se hacen **antes de abrir la transacción**, para no tener bloqueada la fila del secuencial mientras se espera a otro servicio.
 
 ## El secuencial: por qué vive aquí y por qué es atómico
 
@@ -141,12 +143,14 @@ Todo con Dinero.js — cero `Number` en operaciones. `allocate()` para distribui
 
 Una factura emitida es un **documento legal inmutable**. Aunque el cliente cambie de nombre o el producto suba de precio mañana, la factura conserva los datos del momento en que se emitió.
 
-| Snapshot | Origen | Se actualiza en... |
+| Snapshot | Origen (consulta HTTP) | Cuándo se fija |
 |----------|--------|--------------------|
-| `customer_snapshot` | [customer](./customer-service.md) via `customer.customer.updated` | solo borradores (`draft`) |
-| `issuer_snapshot` | [organization](./organization-service.md) via `organization.org.updated` | solo borradores |
-| `product_snapshot` (línea) | [product](./product-service.md) via `product.product.updated` | solo borradores |
-| `rate_snapshot` (impuesto) | [tax](./tax-service.md) via `tax.tax_rate.upserted` | solo borradores |
+| `customer_snapshot` | [customer](./customer-service.md) | al crear el borrador; al emitir se vuelve a pedir **solo** si falta o no trae `identificationTypeCode` (borradores antiguos) |
+| `issuer_snapshot` | [organization](./organization-service.md) | al emitir |
+| `product_snapshot` (línea) | [product](./product-service.md) | al añadir la línea |
+| `rate_snapshot` (impuesto) | [tax](./tax-service.md) | al añadir la línea |
+
+El diseño preveía refrescar los snapshots de los borradores al llegar `customer.customer.updated`, `product.product.updated`, etc. **No está construido**: billing no escucha esos eventos, así que un borrador conserva los datos del momento en que se le añadió cada cosa.
 
 Emitida (`issued`) → **inmutable**. Nunca se cambia. Si hay un error, se emite una nota de crédito para corregir.
 
@@ -189,7 +193,7 @@ POST /invoices/:id/issue
                                               (audit, notificación, etc.)
 ```
 
-**Billing NO consume los eventos `fiscal.*`.** El estado fiscal (autorizado / rechazado) es de responsabilidad del servicio fiscal, no del comercial. Si algún consumidor (audit, notificaciones) quiere saber el estado fiscal, escucha `fiscal.*.invoice.authorized` directamente.
+**Billing NO consume los eventos `fiscal.*`** (su único consumidor escucha su propio `billing.invoice.issued`, ver [Eventos](#eventos)). El estado fiscal (autorizado / rechazado) es de responsabilidad del servicio fiscal, no del comercial. Si algún consumidor (audit, notificaciones) quiere saber el estado fiscal, escucha `fiscal.*.invoice.authorized` directamente.
 
 Esta separación permite que:
 - Billing funcione **hoy sin ningún servicio fiscal** (solo emite comercialmente).
@@ -197,6 +201,8 @@ Esta separación permite que:
 - Perú se sume después con `fiscal-peru`, también sin tocar billing.
 
 ## API REST (implementada)
+
+Verificado contra `src/interface/http/routes.ts` el 2026-09-16. Todas exigen organización en el contexto.
 
 | Método | Ruta | Permiso | Controller |
 |--------|------|---------|------------|
@@ -208,31 +214,41 @@ Esta separación permite que:
 | DELETE | `/invoices/:id/lines/:lineId` | `invoice:update` | `removeLineController` |
 | POST | `/invoices/:id/issue` (asigna secuencial) | `invoice:issue` | `issueInvoiceController` |
 | POST | `/invoices/:id/void` | `invoice:void` | `voidInvoiceController` |
-| GET | `/invoices/:id/pdf` (RIDE comercial) | `invoice:read` | (futuro) |
+| POST | `/invoices/:id/credit-note` (NC tipo `04` sobre una factura emitida) | `invoice:issue` | `issueCreditNoteController` |
+| POST | `/invoices/from-pos` ⚠️ sin commitear | `invoice:create` **y** `invoice:issue` | `ingestPosSaleController` |
+
+No hay `GET /invoices/:id/pdf`: el PDF comercial se genera por evento y se guarda en document-service (ver abajo), y el RIDE fiscal lo sirve [fiscal-ecuador](./fiscal-ecuador.md).
+
+## Ingesta de ventas del POS (`POST /invoices/from-pos`)
+
+> ⚠️ **Estado al 2026-09-16: escrito y con tests, pero sin commitear** (migración `20260916000000-pos-sale-ingest.cjs`, caso de uso `ingest-pos-sale.ts`). Nunca se ha probado de punta a punta con un POS real. El otro lado está en [POS](../pos/punto-de-venta.md#subida-de-ventas-al-crm-pushts).
+
+Convierte una venta de caja, que ya ocurrió y ya se cobró, en una **factura emitida** en una sola transacción: crea la factura, añade las líneas con los impuestos del catálogo y la emite con el secuencial del punto de emisión del terminal. Emitir es lo que dispara el descuento de stock en [inventory-service](./inventory-service.md) y el envío al SRI en [fiscal-ecuador](./fiscal-ecuador.md); por eso no se deja en borrador.
+
+Cuerpo: `terminalId`, `posSaleId` (texto: es el id autoincremental de la base local del POS), `establishmentId`, `emissionPointId`, `customerId` opcional, `currencyCode` opcional (USD por defecto), `posTotalCents` opcional y `lines[]` (`productId`, `quantity`, `unitPrice` como string decimal, `discountCents`, `description`).
+
+- **Idempotente por `(organization_id, pos_terminal_id, pos_sale_id)`**, con índice único `uniq_invoices_pos_sale`. Si la venta ya estaba, devuelve la misma factura con **200** en vez de **201**. El POS puede perder la respuesta y reintentar sin duplicar.
+- **Sin `customerId` se factura a CONSUMIDOR FINAL**: el cliente de sistema (`isSystem`) con identificación `9999999999999` que customer-service crea al dar de alta la organización. Si la organización no lo tiene, la venta falla.
+- **Los totales del terminal no mandan.** Se recalculan desde el catálogo y la diferencia se guarda en `pos_totals_diff_cents`. Cero es lo normal; otro valor indica que un precio o IVA cambió en el CRM después de que el terminal se llevara su copia. No se rechaza la venta, porque el terminal quedaría reintentando para siempre algo que ya se cobró.
+- Siempre es factura (`01`), nunca otro comprobante.
 
 ## Eventos
 
-**Publica:**
+**Publica** (verificado 2026-09-16):
 
-| Evento | Cuándo | Payload clave |
-|--------|--------|---------------|
-| `billing.invoice.created` | Nuevo borrador | `{ invoiceId, organizationId, totalCents }` |
-| `billing.invoice.issued` | Emisión con secuencial | `{ invoiceId, number, customerSnapshot, totals }` |
-| `billing.invoice.voided` | Anulación | `{ invoiceId, reason }` |
+| Evento | Cuándo |
+|--------|--------|
+| `billing.invoice.created` | Nuevo borrador |
+| `billing.invoice.updated` | Edición de un borrador |
+| `billing.invoice.line_added` / `line_removed` | Cambio de líneas en un borrador |
+| `billing.invoice.issued` | Emisión con secuencial. **También se publica al emitir una nota de crédito**: es el mismo evento con el tipo de comprobante `04` |
+| `billing.invoice.voided` | Anulación |
 
-**Consume (read-models — planificado para Fase 2):**
+El payload de `billing.invoice.issued` lleva número, secuencial, `countryCode`, `customerSnapshot`, `issuerSnapshot`, totales en centavos y las líneas con sus impuestos: lo suficiente para que fiscal-ecuador, inventory-service y notification-service no tengan que consultar nada.
 
-| Evento | Origen | Acción |
-|--------|--------|--------|
-| `organization.establishment.created` | [organization](./organization-service.md) | Read-model |
-| `organization.billing_point.created` | [organization](./organization-service.md) | Read-model + inicializa `SEQUENCE` |
-| `organization.org.updated` | [organization](./organization-service.md) | Refresca snapshot en borradores |
-| `customer.customer.created/updated/disabled` | [customer](./customer-service.md) | Read-model |
-| `product.product.created/updated/disabled` | [product](./product-service.md) | Read-model |
-| `tax.tax_rate.upserted` | [tax](./tax-service.md) | Read-model de tasas |
-| `tax.document_type.upserted` | [tax](./tax-service.md) | Read-model de tipos de comprobante |
+**Consume:** solo **su propio `billing.invoice.issued`** (cola `billing-service.invoice-documents`). Busca en `application/documents/registry.ts` los generadores del país de la factura y sube cada archivo a [document-service](./document-service.md) con categoría `comprobante`. Hoy solo hay generadores para **EC**: un PDF y un XML **comerciales genéricos** (`factura-<número>.pdf/.xml`), que **no son** el XML firmado ni el RIDE del SRI. Para otro país no genera nada.
 
-> **Nota de implementación:** Los read-models se pueblan inicialmente bajo demanda (API calls internas) y se migrarán a eventos en Fase 2.
+No consume eventos de otros servicios: los datos de organización, cliente, producto, tasas y tipos de comprobante los pide por HTTP (ver la sección *Entidades dueñas*).
 
 ## Dependencias
 
@@ -240,7 +256,9 @@ Esta separación permite que:
 - **[customer](./customer-service.md)** — receptores.
 - **[product](./product-service.md)** — líneas de factura.
 - **[tax](./tax-service.md)** — tasas y tipos de comprobante (via read-model).
-- **[document-service](./document-service.md)** — almacena el PDF comercial (RIDE).
+- **[document-service](./document-service.md)** — almacena el PDF y el XML comerciales que genera el consumidor de `invoice.issued`.
+
+Todas por HTTP y en el momento de usarlas, no por read-model.
 
 ## Implementación de referencia
 

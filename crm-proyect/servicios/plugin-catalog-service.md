@@ -56,29 +56,40 @@ Más `business_profiles` y sus tablas de recomendación y traducción (ver [perf
 
 ## Dependencias y cotización
 
-Un plugin puede depender de otros. `POST /organizations/me/plugins/:code/quote` devuelve **lo que costaría activarlo de verdad**: el precio del plugin más el de cada dependencia que aún no esté activa. Las que ya están activas no se cobran dos veces, y las de núcleo nunca suman.
+Un plugin puede depender de otros. `GET /organizations/me/plugins/:code/quote` devuelve **lo que costaría activarlo de verdad**: el precio del plugin más el de cada dependencia que aún no esté activa. Las que ya están activas no se cobran dos veces, y las de núcleo nunca suman.
 
 Activar arrastra las dependencias: no se puede tener facturación electrónica sin el catálogo de productos.
 
 ## API REST
 
-| Método | Ruta | Nota |
-|--------|------|------|
-| GET | `/plugins` | catálogo público |
-| GET | `/business-profiles` | público |
-| GET | `/organizations/me/plugins` · `/catalog` | lo contratado y el catálogo con su estado |
-| POST | `/organizations/me/plugins/:code/quote` | cotización con dependencias |
-| POST | `/organizations/me/plugins/:code/activate` · `/deactivate` | |
-| POST | `/organizations/me/plugins/activate` | activación en lote (alta) |
-| GET/POST | `/organizations/me/plugin-requests` | pedir un módulo que no existe |
-| POST | `/admin/plugin-requests/:id/fulfill` · `/reject` | lo atiende el administrador de la plataforma |
-| GET | `/organizations/me/business-profiles/:code/recommendations` | ver [perfiles de negocio](./perfiles-de-negocio.md) |
+Verificado contra `src/interface/http/routes.ts` el 2026-09-16. Salvo `/plugins` y `/business-profiles`, todas exigen organización en el contexto.
+
+| Método | Ruta | Permiso | Nota |
+|--------|------|---------|------|
+| GET | `/plugins` | público | catálogo |
+| GET | `/business-profiles` | público | |
+| GET | `/organizations/me/plugins` · `/organizations/me/plugins/catalog` | — | lo contratado y el catálogo con su estado |
+| GET | `/organizations/me/plugins/:code/quote` | — | cotización con dependencias |
+| POST | `/organizations/me/plugins/:code/activate` · `/deactivate` | `plugins:manage` | |
+| POST | `/organizations/me/plugins/activate` | `plugins:manage` | activación en lote (alta) |
+| GET · POST | `/organizations/me/plugin-requests` | — / `plugins:manage` | pedir un módulo que no existe |
+| POST | `/admin/plugin-requests/:id/fulfill` · `/reject` | `plugins:admin` | lo atiende el administrador de la plataforma |
+| GET · PUT | `/organizations/me/business-profile` | — / `plugins:manage` | perfil de negocio elegido por la organización |
+| GET | `/organizations/me/business-profiles/:code/recommendations` | — | ver [perfiles de negocio](./perfiles-de-negocio.md) |
 
 ## Eventos
 
-**Publica:** `plugin.business_profile.selected`, `plugin.custom_request.created`, `plugin.custom_request.fulfilled`, `plugin.custom_request.rejected`.
+**Publica** (verificado 2026-09-16):
 
-Los servicios que necesitan saber qué está contratado (por ejemplo [inventory-service](./inventory-service.md)) mantienen su propia réplica de `organization_plugins` a partir de estos eventos, en vez de preguntar en caliente.
+| Evento | Cuándo | Lo consume |
+|---|---|---|
+| `plugin.activated` | Activar un plugin (también en lote y por dependencia) | gateway (invalida la caché y emite `plugins.changed`), [inventory](./inventory-service.md), audit |
+| `plugin.deactivated` | Desactivar | gateway, [inventory](./inventory-service.md), audit |
+| `plugin.created` | Al atender una petición a medida se crea el plugin nuevo | gateway, audit |
+| `plugin.business_profile.selected` | `PUT /organizations/me/business-profile` | gateway, audit |
+| `plugin.custom_request.created` / `.fulfilled` / `.rejected` | Ciclo de una petición a medida | gateway, audit |
+
+`plugin.activated` y `plugin.deactivated` son los que importan: sin ellos el gateway tardaría hasta 60 s (su caché) en dejar pasar un módulo recién activado, e [inventory-service](./inventory-service.md) no sabría que tiene que atender a esa organización (mantiene su propia réplica de `organization_plugins` con ellos).
 
 ## Dónde se nota en el resto del sistema
 

@@ -2,7 +2,7 @@
 
 [← Volver al índice](../README.md) · [tax-service](./tax-service.md) · [product-service](./product-service.md)
 
-> **Estado: construido y desplegado.** Verificado contra el código el 2026-09-14. Tablas reales: `customers`, `contacts`, `addresses`, `tags`, `customer_tags`, `identification_types`.
+> **Estado: construido y desplegado.** Verificado contra el código el 2026-09-16. Tablas reales: `customers`, `contacts`, `addresses`, `tags`, `customer_tags`, `identification_types`, `outbox_messages`, `processed_events`.
 
 ## Responsabilidad
 
@@ -87,41 +87,56 @@ sequenceDiagram
     Note over B: facturas emitidas conservan su snapshot
 ```
 
-## API REST (resumen)
+> ⚠️ Este diagrama es el **diseño**: billing no consume `customer.customer.updated`. El snapshot se toma por HTTP al crear el borrador (y se repone al emitir si falta).
+
+## API REST
+
+Verificado contra `src/interface/http/routes.ts` el 2026-09-16.
 
 | Método | Ruta | Permiso |
 |--------|------|---------|
-| GET | `/customers?search=&tag=&status=` | `customer:read` |
-| GET | `/customers/:id` | `customer:read` |
+| GET | `/customers` | `customer:read` |
+| GET | `/customers/:id` | `customer:read` (incluye `identificationTypeCode`) |
 | POST | `/customers` | `customer:create` |
 | PATCH | `/customers/:id` | `customer:update` |
-| DELETE | `/customers/:id` | `customer:delete` (baja lógica) |
-| POST | `/customers/:id/contacts` | `customer:update` |
-| POST | `/customers/:id/addresses` | `customer:update` |
-| GET | `/tags` · POST `/tags` | `customer:read` / `customer:update` |
+| POST | `/customers/:id/disable` | `customer:update` (baja lógica) |
+| GET · POST | `/customers/:id/contacts` | `customer:read` / `customer:update` |
+| PATCH · DELETE | `/contacts/:id` | `customer:update` |
+| GET · POST | `/customers/:id/addresses` | `customer:read` / `customer:update` |
+| PATCH · DELETE | `/addresses/:id` | `customer:update` |
+| GET · POST | `/tags` | `customer:read` / `customer:update` |
+| POST | `/customers/:id/tags` | `customer:update` (asignar) |
+| DELETE | `/customers/:id/tags/:tagId` | `customer:update` (quitar) |
+| GET | `/identification-types` | `customer:read` |
 
-Todas filtran por `organizationId` del contexto.
+No existe `DELETE /customers/:id` ni el permiso `customer:delete` en uso. Todas filtran por `organizationId` del contexto.
 
 ## Eventos
 
-**Publica:**
+**Publica** (verificado 2026-09-16):
 
-| Evento | Cuándo | Consumido por |
-|--------|--------|---------------|
-| `customer.customer.created` | Nuevo cliente | [realtime](./realtime-service.md) (refresca listas en vivo) |
-| `customer.customer.updated` | Edición | [billing](./billing-service.md) (actualiza borradores) |
-| `customer.customer.disabled` | Baja | [billing](./billing-service.md) (impide nuevas facturas) |
+| Evento | Cuándo |
+|--------|--------|
+| `customer.customer.created` / `.updated` / `.disabled` | Alta, edición, baja |
+| `customer.contact.added` / `.updated` / `.deleted` | Contactos |
+| `customer.address.added` / `.updated` / `.deleted` | Direcciones |
+| `customer.tag.created` | Nueva etiqueta |
+| `customer.tag.assigned` / `.removed` | Etiquetar o quitar etiqueta a un cliente |
+
+Hoy solo los recibe [audit-log-service](./audit-log-service.md). **billing no los consume**: pide el cliente por HTTP al crear o emitir la factura.
 
 **Consume:**
 
 | Evento | Origen | Acción |
 |--------|--------|--------|
-| `billing.invoice.issued` | [billing](./billing-service.md) | (opcional) actualizar "última compra" / estadísticas del cliente |
+| `tax.identification_type.upserted` | [tax](./tax-service.md) | Upsert en la tabla local `identification_types` |
+| `organization.org.updated` | [organization](./organization-service.md) | Crea el cliente de sistema **CONSUMIDOR FINAL** de la organización (`is_system`, identificación `9999999999999`) si todavía no existe |
 
 ## Dependencias
 
-- **tax-service**: para tipos de identificación y validación por país (vía read-model).
-- Lo consumen [billing](./billing-service.md) y [realtime](./realtime-service.md).
+- **tax-service**: tipos de identificación, vía el read-model `identification_types`.
+- **organization-service**: su evento dispara la creación de CONSUMIDOR FINAL.
+- Lo consultan por HTTP [billing](./billing-service.md) (incluida la búsqueda de CONSUMIDOR FINAL para las ventas del POS) y el [POS](../pos/punto-de-venta.md) al sincronizar.
 
 ## Validaciones (ver [validación](../arquitectura/validacion.md))
 

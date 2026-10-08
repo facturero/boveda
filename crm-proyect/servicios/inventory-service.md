@@ -2,7 +2,7 @@
 
 [← Volver al índice](../README.md) · [product-service](./product-service.md) · [billing-service](./billing-service.md) · [plugin-catalog-service](./plugin-catalog-service.md)
 
-> **Estado: construido, NO desplegado (2026-09-14).** El código está completo y con manifiestos de k8s, pero no corre en el clúster. El gateway ya tiene sus rutas, protegidas por los plugins `inventory.warehouses` e `inventory.kardex`.
+> **Estado: desplegado y sano (2026-09-15).** Corre en el clúster (`inventory-service-node`, puerto 3013), con sus 10 tablas creadas por la migración, `/health` en 200 y su cola `inventory-service.events` con consumidor. El gateway ya tiene sus rutas, protegidas por los plugins `inventory.warehouses` e `inventory.kardex`.
 
 ## Responsabilidad
 
@@ -73,14 +73,17 @@ Todo el dinero en **centavos (BIGINT)**, como el resto del sistema.
 
 ## API REST
 
-| Método | Ruta | Plugin |
-|--------|------|--------|
-| GET/POST | `/warehouses` · `/warehouses/:id` | `inventory.warehouses` |
-| POST | `/warehouses/:id/deactivate` | `inventory.warehouses` |
-| GET | `/stock` · `/stock/products/:productId` | `inventory.kardex` |
-| GET | `/stock/movements` | `inventory.kardex` |
-| POST | `/stock/adjustments` | `inventory.kardex` |
-| POST | `/stock/transfers` | `inventory.kardex` |
+Verificado contra `src/interface/http/routes.ts` el 2026-09-16.
+
+| Método | Ruta | Permiso | Plugin (gateway) |
+|--------|------|---------|--------|
+| GET · POST | `/warehouses` | `inventory:read` / `inventory:manage` | `inventory.warehouses` |
+| GET · PATCH | `/warehouses/:id` | `inventory:read` / `inventory:manage` | `inventory.warehouses` |
+| POST | `/warehouses/:id/deactivate` | `inventory:manage` | `inventory.warehouses` |
+| GET | `/stock` · `/stock/products/:productId` | `inventory:read` | `inventory.kardex` |
+| GET | `/stock/movements` | `inventory:read` | `inventory.kardex` |
+| POST | `/stock/adjustments` | `inventory:adjust` | `inventory.kardex` |
+| POST | `/stock/transfers` | `inventory:transfer` | `inventory.kardex` |
 
 ## Eventos
 
@@ -93,14 +96,23 @@ Todo el dinero en **centavos (BIGINT)**, como el resto del sistema.
 | `product.product.created/updated/disabled` | refresca el modelo de lectura |
 | `organization.establishment.created` | crea la bodega del establecimiento |
 | `organization.org.updated` | datos de la organización |
-| eventos de plugins | activa o apaga el módulo para esa organización |
+| `plugin.activated` / `plugin.deactivated` | activa o apaga el módulo para esa organización |
 
 **Publica:** `inventory.stock.entered`, `inventory.stock.consumed`, `inventory.stock.adjusted`, `inventory.stock.transferred`, `inventory.stock.negative`, `inventory.stock.stale`, `inventory.warehouse.created`.
 
 `inventory.stock.negative` y `inventory.stock.stale` son avisos para una persona: existencias en negativo (se vendió lo que no había) y posiciones sin movimiento.
 
-## Pendiente antes de desplegarlo
+## Pendiente
 
-- Desplegarlo: hay `k8s/deployment.yaml` y `k8s/service.yaml`, y el CI no lo ha corrido.
-- ⚠️ `INVENTORY_SERVICE_URL` del gateway apuntaba a `inventory-service` cuando el Service se llama `inventory-service-node` — ya corregido en el gateway, pero conviene verificarlo al desplegar.
+**Lo que costó desplegarlo (2026-09-15), por si se repite en otro servicio nuevo:** la CI
+fallaba en `npm ci` con 401 al bajar `@facturero/outbox-relay`, porque al repo le faltaban
+los secretos de Actions `NODE_AUTH_TOKEN` y `SOPS_AGE_KEY`; no se pueden copiar de otro
+repo (son de solo escritura), pero sus valores están en la PC de desarrollo: el token en
+`cmr-proyect/.env` y la clave age en `~/.config/sops/age/keys.txt`. Además le faltaba el
+patrón de SOPS entero: `config/secrets.production.enc` y los tres pasos del job de deploy
+que lo descifran y crean `inventory-db` e `inventory-rabbitmq`. La base `inventory_db` y su
+usuario se crearon a mano en MySQL. El manifiesto apuntaba a `plugin-catalog-service-node`,
+un Service que no existe (es `plugin-catalog-service`).
+
 - Decidir el método de costeo por organización y de dónde sale el costo de compra (hoy entra por `purchase_in` manual: no hay módulo de compras).
+- El [POS](../pos/punto-de-venta.md) todavía no valida stock al vender: falta decidir qué hace la caja offline cuando no puede consultar el CRM.

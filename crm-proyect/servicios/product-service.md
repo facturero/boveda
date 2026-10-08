@@ -4,7 +4,7 @@
 
 > [!info] Estado (2026-07-06)
 > **Re-especificado (v2)** — el servicio se reconstruye desde cero con los contratos de `backend/product-service/` (`IMPLEMENTATION.md` + `openapi.yaml` + `asyncapi.yaml`). Cambios v2 respecto al primer build: **precios en centavos (BIGINT) con Dinero.js**, **imágenes de producto** (referencias URL con principal + default server-side). Puerto **3006**, BD **`product_db`**.
-> - ✅ **Al 2026-09-14** el `OutboxRelay` ya está cableado y los permisos `product:*` existen. Tablas reales: `products`, `categories`, `units`, `product_taxes`, `product_images`, `product_establishments`, `tax_rates`.
+> - ✅ **Al 2026-09-16** el `OutboxRelay` está cableado y los permisos `product:*` existen. Tablas reales: `products`, `categories`, `units`, `product_taxes`, `product_images`, `product_establishments`, `outbox_messages`, `processed_events`. **No hay tabla `tax_rates`**: la migración `20260709000000-drop-tax-rates-table.cjs` la eliminó y las tasas se piden a tax-service por HTTP.
 > - El **SKU del producto** es lo que viaja como `productCode` en `billing.invoice.issued` y acaba en el `codigoPrincipal` del XML del SRI (máx. 25 caracteres). Ver [facturación electrónica](../facturacion-electronica/flujo-end-to-end.md).
 > - `product.product.*` dispara `catalog.changed` por el socket del gateway; el POS y el frontend hacen un pull autenticado (el catálogo nunca viaja por el socket).
 
@@ -75,11 +75,11 @@ erDiagram
     }
 ```
 
-Read-model local: `tax_rates` (alimentado por `tax.tax_rate.upserted`) + `outbox_messages` + `processed_events`.
+Además `product_establishments` (en qué establecimientos se vende cada producto), `outbox_messages` y `processed_events`. Sin read-model de tasas.
 
 ## La pieza clave: asignación de impuestos por país (M:N)
 
-Cada producto se asocia a **una o más** tasas (`PRODUCT_TAX → tax_rate_id`) del catálogo de [tax-service](./tax-service.md) **del país de la organización** (ej. IVA + retención). El servicio valida contra su **read-model** local que la tasa exista y pertenezca al país correcto — sin llamar a tax-service. El `kind` **no lo envía el cliente**: se copia de la tasa al asignarla. El set se gestiona con `PUT /products/:id/taxes` (reemplazo completo).
+Cada producto se asocia a **una o más** tasas (`PRODUCT_TAX → tax_rate_id`) del catálogo de [tax-service](./tax-service.md) **del país de la organización** (ej. IVA + retención). El servicio valida que la tasa exista y pertenezca al país correcto **preguntando a tax-service por HTTP** (`TaxRateHttpRepository`, `GET /countries/:code/tax-rates`). El nombre del puerto (`TaxRateReadModelRepository`) es del diseño original, que preveía una copia local; esa tabla se eliminó. Si tax-service no responde, no se pueden asignar impuestos. El `kind` **no lo envía el cliente**: se copia de la tasa al asignarla. El set se gestiona con `PUT /products/:id/taxes` (reemplazo completo).
 
 ## Imágenes (v2)
 
@@ -106,7 +106,7 @@ Cada producto se asocia a **una o más** tasas (`PRODUCT_TAX → tax_rate_id`) d
 | GET/POST | `/products/:id/images` · DELETE `/products/:id/images/:imageId` · PUT `.../:imageId/primary` | `product:read` / `product:update` |
 | GET/POST | `/categories` · PATCH/DELETE `/categories/:id` | `product:read` / `product:create` / `product:update` / `product:delete` |
 | GET/POST | `/units` · PATCH `/units/:id` | `product:read` / `product:create` / `product:update` |
-| GET | `/tax-rates` (read-model, para el selector del front) | `product:read` |
+| GET | `/tax-rates` (proxy a tax-service, para el selector del front) | `product:read` |
 
 Todas filtran por `organization_id` del contexto (gateway); cross-org → `404`. El precio entra como string (`price: "19.99"` + `currencyCode`) y sale dual (`price` + `priceCents`).
 
@@ -114,23 +114,25 @@ Todas filtran por `organization_id` del contexto (gateway); cross-org → `404`.
 
 **Publica** (payload con `priceCents`, `currencyCode`, `priceIncludesTax`, `taxes[]`, `imageUrl` — snapshot completo):
 
-| Evento | Cuándo | Consumido por |
+Verificado 2026-09-16:
+
+| Evento | Cuándo | Lo consume |
 |--------|--------|---------------|
-| `product.product.created` | Nuevo producto | [realtime](./realtime-service.md) |
-| `product.product.updated` | Cambio de datos/precio/impuestos/imagen principal | [billing](./billing-service.md) (borradores), realtime |
-| `product.product.disabled` | Baja | [billing](./billing-service.md) |
+| `product.product.created` | Nuevo producto | gateway (hub → `catalog.changed`), [inventory](./inventory-service.md) (read-model) |
+| `product.product.updated` | Cambio de datos, precio, impuestos o imágenes (añadir, quitar, cambiar la principal) | gateway, [inventory](./inventory-service.md) |
+| `product.product.disabled` | Baja | gateway, [inventory](./inventory-service.md) |
+| `product.category.created` / `.updated` / `.deleted` | Categorías | audit |
+| `product.unit.created` / `.updated` | Unidades | audit |
 
-**Consume:**
+billing **no** consume estos eventos: pide el producto por HTTP al añadir la línea.
 
-| Evento | Origen | Acción |
-|--------|--------|--------|
-| `tax.tax_rate.upserted` | [tax](./tax-service.md) | Upsert en el read-model local `tax_rates` |
-| `billing.invoice.issued` | [billing](./billing-service.md) | (fase 2) descuenta stock si `track_stock` |
+**Consume:** nada. El descuento de stock al facturar lo hace [inventory-service](./inventory-service.md), no este servicio.
 
 ## Dependencias
 
-- **tax-service**: validar tasas por país (vía read-model).
-- Lo consumen [billing](./billing-service.md) y [realtime](./realtime-service.md).
+- **tax-service**: validar tasas por país, **por HTTP** en cada asignación.
+- **organization-service**: establecimientos, por HTTP (`establishment-http-repository`).
+- Lo consultan por HTTP [billing](./billing-service.md) y el [POS](../pos/punto-de-venta.md); inventory y el gateway escuchan sus eventos.
 
 ## Validaciones (ver [validación](../arquitectura/validacion.md))
 
@@ -145,6 +147,6 @@ Todas filtran por `organization_id` del contexto (gateway); cross-org → `404`.
 ## Notas
 
 - `price_includes_tax` define si el precio capturado ya trae IVA (retail) o no; billing lo usa para calcular base e impuesto.
-- `track_stock` conecta con el futuro `inventory-service` (fase 2).
+- `track_stock` conecta con [inventory-service](./inventory-service.md), desplegado desde el 2026-09-15.
 - Listas de precios por cliente/moneda → `pricing-service` en fase 2; aquí queda el precio base.
 - Paginación de listados: pendiente de definir globalmente (aplicará a todos los servicios a la vez).

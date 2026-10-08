@@ -83,12 +83,14 @@ El diseño del sistema ya define un consumidor de auditoría que bindea `#` (tod
 | `organization.org.updated` | organization | Actualización del perfil fiscal |
 | `organization.establishment.created` | organization | Alta de establecimiento |
 | `organization.billing_point.created` | organization | Alta de punto de emisión |
-| `customer.customer.created` / `.updated` / `.deleted` | customer | CRUD de clientes |
+| `customer.customer.created` / `.updated` / `.disabled` | customer | Alta, edición y baja de clientes |
 | `product.product.updated` | product | Cambios de producto |
-| `tax.tax_rate.upserted` | tax | Altas/bajas de tasas |
-| `billing.invoice.issued` | billing | Emisión de factura |
-| `billing.invoice.authorized` | billing | Autorización fiscal (SRI/DIAN) |
+| `tax.tax_rate.upserted` | tax | Altas/cambios de tasas |
+| `billing.invoice.issued` | billing | Emisión de factura (y de nota de crédito) |
+| `fiscal.ec.invoice.authorized` / `.rejected` | fiscal-ecuador | Resultado del SRI |
 | `billing.invoice.voided` | billing | Anulación de factura |
+
+El catálogo real de cada servicio está en su ficha (sección *Eventos*). No existen `customer.customer.deleted` ni `billing.invoice.authorized`.
 
 > **Cobertura "cada acción de cada usuario".** La base hoy es: **todo evento de dominio con contexto de usuario**. Para expandir a *toda operación REST* (incluso GETs y acciones que hoy no emiten evento), cada servicio publicaría además un evento `audit.*` por acción relevante (ver [Evolución](#evolución)). El consumidor del audit-log no distingue: persiste lo que llegue al exchange.
 

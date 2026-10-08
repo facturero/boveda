@@ -6,13 +6,17 @@ El front es una **SPA en Vue 3** (Composition API) con Vuetify 3, Pinia, Vue Rou
 
 > Principio rector: el front es un **cliente más**, no una fuente de verdad. Da buena UX (validación inmediata, tiempo real, navegación por permisos), pero el back vuelve a validar y autorizar todo. Ver [validación](../arquitectura/validacion.md).
 
-> **Estado real al 2026-09-14.** Estructura: `api/`, `components/`, `composable/`, `config/`, `i18n/`, `layouts/`, `menus/`, `plugins/`, `router/`, `stores/`, `styles/`, `types/`, `utils/`, `views/`. Vistas por dominio: `customers`, `products`, `employees`, `roles`, `invoices`, `inventory`, `organization`, `plugins`, `settings`, `audit`, `onboarding`.
+> **Estado real al 2026-09-16.** Estructura: `api/`, `components/`, `composable/`, `config/`, `i18n/`, `layouts/`, `menus/`, `plugins/`, `router/`, `stores/`, `styles/`, `types/`, `utils/`, `views/`. Vistas por dominio: `customers`, `products`, `employees`, `roles`, `invoices`, `inventory`, `organization`, `plugins`, `settings`, `audit`, `onboarding`.
 >
 > - **Tres idiomas** (`es`, `en`, `fr`): todo texto visible va por i18n, incluidos los nombres y descripciones de los plugins y de los proveedores de notificación, que el backend manda como **claves**, no como texto.
 > - **Estilos: clases utilitarias de Vuetify antes que CSS propio** (`text-primary`, `font-weight-medium`…). Escribir estilos a mano es la excepción.
 > - **Socket**: se conecta a `/ws` del gateway (no a un servicio aparte). Refresca campana, catálogo, plugins y permisos.
 > - **Pruebas end-to-end con Playwright** (`e2e/`), incluido `test:e2e:sri`, que emite una factura real contra el ambiente de pruebas del SRI por la interfaz.
-> - ⚠️ Hay trabajo **sin commitear**: la pantalla de nota de crédito, el botón de RIDE y la división de `InvoiceFormView`. Ver [pendientes de facturación](../facturacion-electronica/pendientes-y-riesgos.md).
+> - **Facturación (subido el 2026-09-14):** pantalla de nota de crédito (`api/invoices.ts → creditNote`), descarga del RIDE en PDF desde `FiscalStatusCard` (`api/fiscal.ts`) y `InvoiceFormView` dividido en componentes de `components/invoices/`.
+>
+> **Añadido el 2026-09-15:**
+> - **Buscador global** en la barra superior (`components/GlobalSearch.vue`, atajo `Ctrl K` / `⌘K`). Busca en tres secciones: *páginas* (el menú lateral más pantallas sin ítem propio, como bodegas o las pestañas de Ajustes), *acciones* directas (nueva factura, nuevo cliente, invitar empleado…) y *plugins* del catálogo. Las entradas están en `menus/search.ts` y **declaran permiso y plugin igual que el router**, para no ofrecer un destino del que el guard echaría al usuario. La coincidencia ignora tildes y mayúsculas, y las palabras clave extra de cada entrada son traducibles (`search.keywords.<id>`). Si nada encaja, ofrece mandar la búsqueda al [asistente](../servicios/asistente-ia.md).
+> - **Selector de idioma** (`components/LocaleSwitcher.vue` + `composable/useLocale.ts`): los idiomas **salen de los JSON cargados en i18n** (añadir una traducción basta para que aparezca), con bandera (`flag-icons`) y el nombre del idioma en sí mismo y en el de la interfaz. La elección se guarda en `localStorage` (`app-locale`) y se aplica también a Vuetify y a `<html lang>`.
 
 ## Tres piezas propias del frontend que no están en ningún servicio
 

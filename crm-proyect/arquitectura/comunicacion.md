@@ -11,11 +11,11 @@ Dos canales, dos propósitos:
 
 Regla: **comandos del usuario** entran por REST; **propagación de cambios** sale por eventos.
 
-> **Estado al 2026-09-14.** El patrón Outbox y los reintentos del consumidor ya no se implementan a mano en cada servicio: viven en la librería [@facturero/outbox-relay](../servicios/outbox-relay.md), **cableada en todos los servicios que publican** (todos menos notification, audit y assistant, que solo consumen).
+> **Estado al 2026-09-16.** El patrón Outbox y los reintentos del consumidor ya no se implementan a mano en cada servicio: viven en la librería [@facturero/outbox-relay](../servicios/outbox-relay.md), **cableada en todos los servicios que publican** (todos menos notification, audit y assistant, que solo consumen).
 >
 > Tres cosas que conviene leer allí antes de tocar mensajería: la **escalera de reintentos** (inmediatos → cola de espera con TTL → estado `failed` en la tabla de idempotencia, no una DLQ de RabbitMQ); el **cambio de topología de 0.1.x a 0.2.x**, que exige borrar a mano las colas `<queue>.retry` heredadas; y el **`ActorContext`**, que propaga *quién* origina la acción hasta el outbox — sin él la bitácora de auditoría queda con `user_id` e `ip` en NULL.
 >
-> ⚠️ **Latencia real de los eventos:** la publicación inmediata tras el commit **no está cableada en ningún servicio**, así que hoy todo evento sale por el temporizador de respaldo del relay: **de 0 a 30 s de retraso**. Detalle y arreglo en [outbox-relay](../servicios/outbox-relay.md).
+> **Latencia de los eventos (2026-09-15):** los 10 servicios que publican enganchan la transacción al relay en su unidad de trabajo (`attachToTransaction`), así que cada evento sale **justo tras el COMMIT**. El temporizador de 30 s queda solo como red de seguridad. Hasta el 2026-09-14 no era así y todo evento tardaba entre 0 y 30 s: un servicio nuevo sin ese enganche vuelve a ese comportamiento. Detalle en [outbox-relay](../servicios/outbox-relay.md).
 >
 > Para las llamadas **síncronas entre servicios** (no del frontend) el mecanismo es el secreto compartido `internal-service-secret` en la cabecera `X-Internal-Secret`, que el gateway **borra** de cualquier petición que venga de fuera.
 
@@ -29,6 +29,8 @@ Todo el tráfico del cliente pasa por el [API Gateway](../servicios/api-gateway.
 4. Enruta a la ruta interna del servicio.
 
 Los servicios **evitan llamarse en cadena** de forma síncrona (acoplamiento + latencia + fallos en cascada). Si billing-service necesita un dato de otro servicio, lo prefiere vía read-model local alimentado por eventos. Solo se permite una llamada síncrona servicio→servicio cuando el dato es imprescindible y no replicable (raro).
+
+> ⚠️ **La realidad (2026-09-16) es la contraria para el núcleo de facturación.** billing-service consulta **por HTTP** a organization, customer, product y tax en cada operación; product-service consulta a tax y organization; fiscal-ecuador a document, tax y organization. Los únicos read-models por eventos son los de customer-service (tipos de identificación), auth-service (país de la organización) e inventory-service (productos, plugins). Consecuencia: **si customer-service, product-service o tax-service están caídos, no se pueden crear facturas ni añadirles líneas**. Las llamadas internas llevan `X-Internal-Secret` o cabeceras de contexto.
 
 ## Comunicación asíncrona (RabbitMQ)
 
@@ -82,21 +84,28 @@ Cada consumidor guarda los `eventId` ya procesados (tabla `processed_events`). S
 
 ## Catálogo de eventos del sistema
 
+> **Verificado contra el código el 2026-09-16.** El diseño original hacía que billing, product y organization mantuvieran read-models alimentados por eventos; **no se construyó así**: esos servicios consultan por HTTP. Por eso casi todo lo que ellos "consumían" en el diseño hoy no lo consume nadie salvo la bitácora. El catálogo de lo que publica cada servicio está en su ficha.
+
+[audit-log-service](../servicios/audit-log-service.md) consume **todos** (`#`) y no se repite en la tabla. Solo aparecen los eventos con algún otro consumidor:
+
 | Evento (routing key) | Lo publica | Lo consumen | Para qué |
 |----------------------|-----------|-------------|----------|
-| `identity.user.created` | auth | realtime | Dar bienvenida / notificar |
-| `identity.user.role_assigned` | auth | gateway (caché de `pv`) | Invalidar tokens con permisos viejos |
-| `identity.user.disabled` | auth | gateway, realtime | Revocar acceso del usuario |
-| `organization.org.updated` | organization | auth, billing | auth: refrescar `country_code` del token · billing: snapshot del emisor |
-| `organization.establishment.created` | organization | billing | Registrar punto de facturación válido |
-| `organization.billing_point.created` | organization | billing | Habilitar secuencial |
-| `customer.customer.created` | customer | realtime | Refrescar listas en vivo |
-| `customer.customer.updated` | customer | billing | Actualizar snapshot en borradores |
-| `product.product.updated` | product | billing | Actualizar precio en borradores |
-| `tax.tax_rate.upserted` | tax | product, billing | Upsert de tasas en read-models locales |
-| `billing.invoice.issued` | billing | realtime, audit, (inventory, payment) | Notificar, auditar, descontar stock, cuentas por cobrar |
-| `billing.invoice.authorized` | billing | realtime | Avisar autorización del SRI/DIAN/etc. |
-| `billing.invoice.voided` | billing | realtime, audit, (inventory) | Reversar |
+| `identity.#` (todos) | auth | gateway | Invalidar la caché de `pv` y emitir `permissions.changed` por el socket |
+| `identity.user.invited` · `.enabled` · `.disabled` · `.password_reset_requested` | auth | notification | Correo y campana |
+| `organization.org.updated` | organization | auth, customer, inventory | auth: `country_code` del token · customer: crear CONSUMIDOR FINAL · inventory: datos de la organización |
+| `organization.establishment.created` | organization | inventory | Crear la bodega del establecimiento |
+| `organization.billing_point.#` | organization | gateway | `.unlinked` → `pos.unlink` al POS |
+| `tax.identification_type.upserted` | tax | customer | Read-model de tipos de identificación |
+| `product.product.#` | product | gateway, inventory | gateway: `catalog.changed` (el POS y el front hacen pull) · inventory: read-model de productos |
+| `plugin.#` | plugin-catalog | gateway | Invalidar la caché de plugins y emitir `plugins.changed` |
+| `plugin.activated` · `.deactivated` | plugin-catalog | inventory | Réplica local de `organization_plugins` |
+| `billing.invoice.issued` | billing | fiscal-ecuador, inventory, notification, billing, gateway | fiscal: XML + SRI · inventory: descontar stock · notification: aviso guardado y correo · billing: PDF/XML comerciales · gateway: empuja la notificación a la campana (`user:<uid>`) si el canal `app` está activo |
+| `billing.invoice.voided` | billing | fiscal-ecuador, inventory, notification, gateway | fiscal: marca anulada / `void_requires_action` · inventory: reponer stock · aviso |
+| `fiscal.ec.invoice.attention_required` | fiscal-ecuador | notification, gateway | Campana: un comprobante necesita a una persona |
+
+Publicados sin consumidor de negocio (solo auditoría): el resto de `customer.*`, `product.category.*`, `product.unit.*`, `tax.*`, `document.file.*`, `inventory.*` y los demás `fiscal.ec.invoice.*` (`pending`, `sent`, `authorized`, `rejected`, `error`, `sequence_gap`…).
+
+No existe `billing.invoice.authorized`: la autorización del SRI la publica fiscal-ecuador como `fiscal.ec.invoice.authorized`, y billing no la escucha.
 
 > Convención: eventos siempre en **pasado** y nombrados por el hecho de negocio, no por la tabla.
 
@@ -124,16 +133,20 @@ sequenceDiagram
 
 No usamos transacciones distribuidas (2PC); preferimos **consistencia eventual** con compensaciones.
 
+> ⚠️ **Ese diagrama es diseño; lo construido no compensa.** [inventory-service](../servicios/inventory-service.md) **no rechaza** una factura por falta de stock ni publica `stock.reserved`/`stock.rejected`: descuenta igualmente, deja la existencia en negativo y publica `inventory.stock.negative` para que una persona lo revise. Una venta ya cobrada (sobre todo desde el POS) no se anula por un descuadre de inventario. Hoy no hay ninguna saga con compensación en el sistema.
+
 ## Auditoría
 
 Un consumidor de auditoría (o `audit-service`) bindea `#` (todos los eventos) del exchange `crm.events` y los persiste con `userId`, `organizationId`, `occurredAt` y payload. Esto da la **bitácora de cumplimiento** sin acoplar cada servicio al registro de auditoría. Crítico para facturación electrónica. → Ver el servicio diseñado: [audit-log-service](../servicios/audit-log-service.md).
 
 ## Resiliencia
 
-- **Reintentos con backoff** en publicación y consumo.
-- **Dead Letter Exchange (DLX):** mensajes que fallan N veces van a `crm.events.dlx` para inspección manual.
-- **Reconexión automática** ante caída del broker (la librería que ya tienes).
-- **Circuit breaker** en las pocas llamadas síncronas servicio→servicio.
+Lo construido (2026-09-16), todo en [@facturero/outbox-relay](../servicios/outbox-relay.md):
+
+- **Publicación:** outbox en la misma transacción, publicado tras el COMMIT, con el temporizador de 30 s como red de seguridad.
+- **Consumo:** reintentos inmediatos → cola de espera con TTL (`<queue>.retry.wait`) → estado `failed` en `processed_events`. **No hay DLX** tipo `crm.events.dlx`: lo que falla del todo se consulta por SQL.
+- **Reconexión automática** ante caída del broker.
+- **Sin circuit breaker** en las llamadas síncronas entre servicios, que además son más de las previstas (ver arriba).
 
 ## Siguiente
 

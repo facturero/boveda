@@ -10,7 +10,7 @@
 > - **`tax_rates` real**: `{ id, country_code, code, name, percentage, kind, is_default }`, con `kind ∈ vat | withholding_iva | withholding_rent | special`. **Aún no** implementa `valid_from`/`valid_to` (versionado temporal) ni `tax_type_id`; eso es **diseño futuro** (ver más abajo).
 > - **Eventos** `.upserted` (tabla de la sección [Eventos](#eventos)).
 > - ✅ **Corregido el 2026-09-14:** el `OutboxRelay` **ya está cableado** en `main.ts`, igual que en el resto de servicios que publican (todos menos notification, audit y assistant, que solo consumen). Los eventos **sí se publican** al broker. El evento real de tarifas es **`tax.tax_rate.upserted`**.
-> - Tablas reales confirmadas el 2026-09-14: `countries`, `tax_rates`, `identification_types`, `document_types`, `outbox_messages`. Sigue sin `TAX_TYPE` ni versionado temporal.
+> - Tablas reales confirmadas el 2026-09-16: `countries`, `tax_rates`, `identification_types`, `document_types`, `outbox_messages`. Sigue sin `TAX_TYPE` ni versionado temporal.
 > - ⚠️ Los ids de `identification_types` de tax-service **no coinciden** con los de customer-service. Por eso lo que viaja entre servicios es el **código** (`04` RUC, `05` cédula, `06` pasaporte, `07` consumidor final), nunca el id. Ver [facturación electrónica](../facturacion-electronica/historial-hallazgos.md).
 
 ## Responsabilidad
@@ -70,7 +70,9 @@ erDiagram
     }
 ```
 
-## Qué cambia entre países (ejemplos cargados)
+## Qué cambia entre países (ejemplos de diseño)
+
+> ⚠️ **Lo realmente cargado (2026-09-16) es solo Ecuador**, por la migración `20260705120001-seed-ecuador.js`: país `EC` (USD); tasas `IVA15` (15 %, por defecto), `IVA0` y `NO_OBJETO`; identificaciones `RUC`, `CEDULA`, `PASAPORTE`, `CONSUMIDOR_FINAL`, `EXTERIOR`; comprobantes `01`, `04`, `05`, `06`, `07`. **No hay IVA 5 % sembrado** ni ningún otro país: las tablas de abajo son ejemplos del diseño.
 
 ### Tasas de IVA (`TAX_RATE`)
 
@@ -123,42 +125,52 @@ timeline
 
 Este servicio es mayormente de **lectura**. Los demás mantienen un **read-model local** de los catálogos (alimentado por eventos) para no depender de él en caliente:
 
+> ⚠️ **Eso es el diseño.** Lo construido (verificado 2026-09-16): **solo customer-service** mantiene una copia local (de `identification_types`). product-service, billing-service y fiscal-ecuador **consultan por HTTP** en el momento de usarlo, y organization-service tiene su propia tabla `countries` sembrada por migración, sin sincronizar con este servicio.
+
 ```mermaid
 graph LR
-    TX[tax-service] -->|tax.tax_rate.upserted| MQ[(RabbitMQ)]
-    MQ --> P[product-service<br/>read-model de tasas]
-    MQ --> B[billing-service<br/>read-model de tasas + comprobantes]
-    MQ --> O[organization-service<br/>países válidos]
+    TX[tax-service] -->|tax.identification_type.upserted| MQ[(RabbitMQ)]
+    MQ --> C[customer-service<br/>read-model de tipos de ID]
+    P[product-service] -->|HTTP: tasas del país| TX
+    B[billing-service] -->|HTTP: tasas + tipos de comprobante| TX
+    F[fiscal-ecuador] -->|HTTP: tarifas de IVA| TX
 ```
 
-- [product-service](./product-service.md): asigna a cada producto un `taxRateId` **del catálogo del país**.
-- [billing-service](./billing-service.md): al emitir, resuelve la tasa vigente y la **congela** en la línea; usa los `DOCUMENT_TYPE` del país para el formato del comprobante.
-- [organization-service](./organization-service.md): valida que el `country_code` exista al crear establecimientos.
+- [product-service](./product-service.md): asigna a cada producto un `taxRateId` **del catálogo del país**, validándolo por HTTP.
+- [billing-service](./billing-service.md): al añadir la línea, pide la tasa y la **congela** en `rate_snapshot`; busca el tipo de comprobante (`01`, `04`) del país por HTTP.
+- [organization-service](./organization-service.md): **no** consulta este servicio (ver arriba).
 
-## API REST (resumen)
+## API REST
 
-Mayormente lectura (catálogos); la escritura es de **administración de plataforma**.
+Verificado contra `src/interface/http/routes.ts` el 2026-09-16. El gateway lo publica en `/countries/*` sin plugin.
 
 | Método | Ruta | Acceso |
 |--------|------|--------|
-| GET | `/countries` | autenticado |
-| GET | `/countries/:code/tax-rates?validOn=YYYY-MM-DD` | autenticado |
+| GET | `/countries` · `/countries/:code` | autenticado |
+| GET | `/countries/:code/tax-rates` | autenticado |
 | GET | `/countries/:code/identification-types` | autenticado |
 | GET | `/countries/:code/document-types` | autenticado |
-| POST | `/countries/:code/tax-rates` | platform admin |
-| PATCH | `/tax-rates/:id` | platform admin |
+| POST | `/countries` (habilitar país) | `tax:manage` |
+| PATCH | `/countries/:code` | `tax:manage` |
+| POST | `/countries/:code/tax-rates` · `/identification-types` · `/document-types` (upsert) | `tax:manage` |
+
+No existen `PATCH /tax-rates/:id` ni el filtro `?validOn=` (no hay vigencia temporal).
+
+⚠️ **`tax:manage` no está en el catálogo de permisos de auth-service** (ninguna migración lo crea), así que hoy **nadie puede escribir por la API**: el catálogo solo cambia por migración.
 
 ## Eventos
 
-**Publica:**
+**Publica** (verificado 2026-09-16):
 
-| Evento | Cuándo | Consumido por |
+| Evento | Cuándo | Lo consume |
 |--------|--------|---------------|
-| `tax.country.enabled` | Se habilita un país | [organization](./organization-service.md) |
-| `tax.country.updated` | Cambio en datos del país | [organization](./organization-service.md) |
-| `tax.tax_rate.upserted` | Alta o cambio de una tasa | [product](./product-service.md), [billing](./billing-service.md) |
+| `tax.country.enabled` | Se habilita un país | nadie (salvo audit) |
+| `tax.country.updated` | Cambio en datos del país | nadie (salvo audit) |
+| `tax.tax_rate.upserted` | Alta o cambio de una tasa | nadie (salvo audit) |
 | `tax.identification_type.upserted` | Alta o cambio de tipo de ID | [customer](./customer-service.md) |
-| `tax.document_type.upserted` | Alta o cambio de comprobante | [billing](./billing-service.md) |
+| `tax.document_type.upserted` | Alta o cambio de comprobante | nadie (salvo audit) |
+
+La migración de siembra también escribe estos eventos en `outbox_messages`, así que un despliegue desde cero los publica.
 
 > **Convención de nombres (implementación real):** los eventos de catálogo usan el sufijo **`.upserted`** (un solo evento cubre alta y edición), no `.created`/`.updated`. El `OutboxRelay` publica el id del evento en `headers.eventId` (idempotencia aguas abajo). Exchange `crm.events` (topic, durable).
 
