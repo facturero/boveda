@@ -6,7 +6,7 @@
 
 Un **perfil de negocio** es una agrupación curada de plugins: "una tienda usa
 estos, una farmacia usa esos mismos más control de lotes". Existe para una sola
-cosa: **que una organización recién creada no tenga que elegir entre 66 módulos
+cosa: **que una organización recién creada no tenga que elegir entre 62 módulos
 sin saber por dónde empezar**.
 
 Es una **recomendación, no una restricción**. Elegir un perfil no limita nada:
@@ -103,9 +103,9 @@ sin marcar).
 
 | Perfil | `code` | Esenciales | Sugeridos |
 |---|---|---|---|
-| Tienda / comercio | `retail.store` | `infra.catalog_products`, `crm.contacts`, `finance.electronic_invoicing`, `pos.core`, `pos.cash_sessions`, `pos.payment_methods` | `inventory.kardex`, `pos.discounts_promotions`, `inventory.reorder_alerts`, `bi.dashboards` |
-| Farmacia | `health.pharmacy` | los seis de Tienda + `inventory.kardex`, `inventory.lot_tracking` | `inventory.reorder_alerts`, `inventory.suppliers`, `purchasing.purchase_orders`, `bi.dashboards` |
-| Restaurante / cafetería | `food.restaurant` | `infra.catalog_products`, `finance.electronic_invoicing`, `pos.core`, `pos.cash_sessions`, `pos.payment_methods` | `pos.discounts_promotions`, `inventory.kardex`, `production.bom`, `hr.attendance` |
+| Tienda / comercio | `retail.store` | `infra.catalog_products`, `crm.contacts`, `finance.electronic_invoicing`, `pos.core`, `pos.payment_methods` | `inventory.kardex`, `inventory.reorder_alerts`, `bi.dashboards` |
+| Farmacia | `health.pharmacy` | los de Tienda + `inventory.kardex`, `inventory.lot_tracking` | `inventory.reorder_alerts`, `inventory.suppliers`, `purchasing.purchase_orders`, `bi.dashboards` |
+| Restaurante / cafetería | `food.restaurant` | `infra.catalog_products`, `finance.electronic_invoicing`, `pos.core`, `pos.payment_methods` | `inventory.kardex`, `production.bom`, `hr.attendance` |
 | Servicios profesionales | `services.professional` | `crm.contacts`, `finance.electronic_invoicing`, `crm.quotes`, `projects.tasks_kanban` | `projects.time_tracking`, `projects.project_billing`, `crm.leads_pipeline`, `comm.shared_documents` |
 | Distribuidora / mayorista | `wholesale.distributor` | `infra.catalog_products`, `crm.contacts`, `finance.electronic_invoicing`, `inventory.warehouses`, `inventory.kardex` | `purchasing.purchase_orders`, `inventory.suppliers`, `inventory.warehouse_transfers`, `crm.quotes`, `finance.accounts_receivable_payable` |
 | Otro / aún no lo sé | `general.other` | `infra.catalog_products`, `crm.contacts`, `finance.electronic_invoicing` | — |
@@ -114,7 +114,7 @@ Farmacia es literalmente Tienda más dos módulos de inventario. Ese es el caso
 que el modelo tiene que soportar bien, y con listas planas se lee de un vistazo
 en la semilla.
 
-**Ojo con el estado de construcción.** De los 66 módulos vendibles solo 12 están
+**Ojo con el estado de construcción.** De los 62 módulos vendibles solo 12 están
 `disponible` hoy; el resto está `en_construccion`. Casi todos los sugeridos de
 la tabla de arriba **todavía no se pueden activar**. La segunda pantalla tiene
 que decirlo, no esconderlo (ver [Pantalla 2](#pantalla-2--recomendados)).

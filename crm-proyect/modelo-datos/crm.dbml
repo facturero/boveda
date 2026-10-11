@@ -1166,6 +1166,15 @@ Table plugin_catalog.organization_plugins {
   status plugin_catalog.activation_status [not null, default: 'active']
   activated_at datetime [not null]
   deactivated_at datetime
+  deactivate_at datetime [note: 'Baja programada: el módulo sigue activo hasta esta fecha (fin del periodo pago). Nulo = ninguna']
+}
+
+// El carrito de módulos de cada organización: lo que dejó pendiente de activar. Se borra al activar.
+Table plugin_catalog.organization_cart_items {
+  organization_id char(36) [pk]
+  plugin_id char(36) [pk]
+  added_by_user_id char(36)
+  added_at datetime [not null]
 }
 
 Table plugin_catalog.plugin_custom_requests {
